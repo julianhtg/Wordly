@@ -10,8 +10,9 @@ public final class ModelDownloader: NSObject, URLSessionDownloadDelegate {
     private let remote: URL
     private let destination: URL
     private var isDownloading = false  // main-thread confined, like the callbacks
-    private lazy var session = URLSession(configuration: .default,
-                                          delegate: self, delegateQueue: nil)
+    // Per-attempt: a URLSession can't be reused after invalidation (CFNetwork
+    // raises an uncatchable NSException), so each retry gets a fresh one.
+    private var session: URLSession?
 
     public init(model: String, destination: URL) {
         self.remote = URL(string:
@@ -29,6 +30,9 @@ public final class ModelDownloader: NSObject, URLSessionDownloadDelegate {
             return
         }
         isDownloading = true
+        let session = URLSession(configuration: .default,
+                                 delegate: self, delegateQueue: nil)
+        self.session = session
         session.downloadTask(with: remote).resume()
     }
 
@@ -61,6 +65,7 @@ public final class ModelDownloader: NSObject, URLSessionDownloadDelegate {
         session.finishTasksAndInvalidate()
         DispatchQueue.main.async {
             self.isDownloading = false
+            self.session = nil
             if let error { self.onDone?(.failure(error)) }
         }
     }

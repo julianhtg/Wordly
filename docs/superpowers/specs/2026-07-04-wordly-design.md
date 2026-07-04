@@ -22,10 +22,11 @@ These are deliberate v1 exclusions, not oversights. Any can be added later.
 
 Swift/AppKit menu bar app, built as an SPM executable and wrapped into a
 `Wordly.app` bundle by a small script (a bundle gives TCC a stable permission
-identity). whisper.cpp is linked in-process as an SPM dependency with Metal
-enabled — the model loads once and stays in RAM. Optional transcript cleanup
-goes through Ollama on localhost. All user-editable state is plain files in
-`~/.config/wordly/`.
+identity). whisper.cpp is linked in-process as an SPM `binaryTarget` pointing
+at the prebuilt `whisper.xcframework` from the official v1.9.1 GitHub release
+(contains a Swift module map, links Metal + Accelerate) — the model loads once
+and stays in RAM. Optional transcript cleanup goes through Ollama on
+localhost. All user-editable state is plain files in `~/.config/wordly/`.
 
 Rejected alternatives:
 - `whisper-server` over HTTP (brew): simpler linking, but a second process to
@@ -34,10 +35,9 @@ Rejected alternatives:
   text injection from Python are unreliable, and it contradicts the "no slow
   Python wrapper" requirement.
 
-Risk: if whisper.cpp's `Package.swift` no longer builds cleanly via SPM at
-implementation time, fall back to building `libwhisper` as an XCFramework via
-the script whisper.cpp ships, or (last resort) approach B with
-`whisper-server`.
+Note: whisper.cpp removed its `Package.swift` upstream (verified 2026-07-04),
+so the XCFramework path above *is* the plan of record, not a fallback. Last
+resort if the prebuilt framework misbehaves: approach B with `whisper-server`.
 
 ## Activation — hotkey semantics
 

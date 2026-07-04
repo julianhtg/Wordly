@@ -1,3 +1,3 @@
 import WordlyCore
 
-print("whisper linked:", WhisperLink.isLinked)
+print("Wordly core builds")

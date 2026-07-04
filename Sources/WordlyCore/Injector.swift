@@ -7,6 +7,10 @@ public enum Injector {
 
     /// Paste `text` at the cursor of the frontmost app, then restore the
     /// user's clipboard. Must be called on the main thread.
+    /// ponytail: no guard against overlapping paste() calls — a second call
+    /// within restoreDelay would snapshot the first transcript as "the user's
+    /// clipboard". AppDelegate's single-flight isProcessing gate prevents this;
+    /// add serialization here only if Injector grows other callers.
     public static func paste(_ text: String,
                              pasteboard: NSPasteboard = .general,
                              restoreDelay: TimeInterval = 0.2) {

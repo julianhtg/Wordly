@@ -12,6 +12,9 @@ public final class PasteboardSwapper {
     }
 
     public func place(_ text: String) {
+        // ponytail: data(forType:) resolves lazy/promised flavors synchronously;
+        // a slow provider stalls the paste and a failed one drops that flavor.
+        // Accepted — async snapshotting only if it hurts in practice.
         snapshot = (pasteboard.pasteboardItems ?? []).map { item in
             let copy = NSPasteboardItem()
             for type in item.types {

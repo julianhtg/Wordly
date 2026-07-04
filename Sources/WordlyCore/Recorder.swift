@@ -3,17 +3,28 @@ import AppKit
 
 /// Captures microphone audio as 16 kHz mono Float32 (what whisper.cpp wants),
 /// accumulated in RAM. Dictation is seconds to minutes — no temp files.
+/// Not thread-safe: call start()/stop() from one thread (the main thread —
+/// AppDelegate's single-flight gate serializes them). Only the tap callback
+/// runs on the audio thread, synchronized via `lock` + `generation`.
 public final class Recorder {
     private let engine = AVAudioEngine()
     private var samples: [Float] = []
     private let lock = NSLock()
+    // Bumped each start(); a straggling tap callback from a previous session
+    // (removeTap doesn't synchronously halt in-flight callbacks) sees a stale
+    // generation and drops its audio instead of polluting the new recording.
+    private var generation = 0
     public private(set) var isRecording = false
 
     public init() {}
 
     public func start() {
         guard !isRecording else { return }
-        lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
+        lock.lock()
+        generation += 1
+        let myGeneration = generation
+        samples.removeAll(keepingCapacity: true)
+        lock.unlock()
 
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
@@ -40,11 +51,14 @@ public final class Recorder {
                 outStatus.pointee = .haveData
                 return buffer
             }
+            // Failure paths above stay silent on purpose: no NSLog on the
+            // real-time audio thread (priority-inversion risk).
             guard status != .error, let channel = converted.floatChannelData else { return }
             self.lock.lock()
+            defer { self.lock.unlock() }
+            guard self.generation == myGeneration else { return }
             self.samples.append(contentsOf:
                 UnsafeBufferPointer(start: channel[0], count: Int(converted.frameLength)))
-            self.lock.unlock()
         }
 
         engine.prepare()
@@ -68,9 +82,9 @@ public final class Recorder {
         isRecording = false
         if !discard { NSSound(named: "Bottle")?.play() }
         lock.lock()
+        defer { lock.unlock() }
         let result = discard ? [] : samples
         samples = []
-        lock.unlock()
         return result
     }
 }

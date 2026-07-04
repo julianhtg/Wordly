@@ -1,5 +1,3 @@
-import Foundation
-
 /// Pure gesture logic for the dictation hotkey. No CoreGraphics — fed by
 /// HotkeyMonitor, fully unit-testable with synthetic timestamps (seconds).
 public struct HotkeyStateMachine {
@@ -12,6 +10,9 @@ public struct HotkeyStateMachine {
         case cancelled     // other key pressed during hold; swallowing our key-up
     }
 
+    /// Effects execute in array order. Where several are returned together,
+    /// `discardCapture` deliberately precedes `repostKey`/`startCapture` so the
+    /// consumer never tears down a capture it just started — do not reorder.
     public enum Effect: Equatable {
         case startCapture, stopAndProcess, discardCapture, repostKey
     }

@@ -76,6 +76,7 @@ final class HotkeyStateMachineTests: XCTestCase {
         XCTAssertEqual(r.0, D.pass)
         XCTAssertEqual(r.1, [E.discardCapture, E.repostKey])  // ^ first, then a passes
         XCTAssertEqual(sm.state, .idle)
+        XCTAssertNil(sm.pendingDeadline)
     }
 
     func testOtherKeysDuringTogglePassAndKeepRecording() {
@@ -102,11 +103,68 @@ final class HotkeyStateMachineTests: XCTestCase {
         let r = sm.hotkeyDown(at: 2)             // timer never fired (edge)
         XCTAssertEqual(r.1, [E.discardCapture, E.repostKey, E.startCapture])
         XCTAssertEqual(sm.state, .held)
+        XCTAssertNil(sm.pendingDeadline)
     }
 
     func testStrayEventsInIdlePass() {
         XCTAssertEqual(sm.hotkeyUp(at: 0).0, D.pass)
         XCTAssertEqual(sm.otherKeyDown(at: 0).0, D.pass)
         XCTAssertEqual(sm.state, .idle)
+    }
+
+    func testExactBoundaries() throws {
+        // Hold of exactly tapWindow is a PTT release, not a tap.
+        // (t - 0 is exact in FP, so this literal boundary is safe.)
+        _ = sm.hotkeyDown(at: 0)
+        var r = sm.hotkeyUp(at: sm.tapWindow)
+        XCTAssertEqual(r.1, [E.stopAndProcess])
+        XCTAssertEqual(sm.state, .idle)
+
+        // Second down exactly at the deadline is a fresh press, not a double-tap.
+        // Boundary times must come from the machine's own arithmetic: a decimal
+        // literal like 1.4 rounds to either side of upTime + tapWindow.
+        _ = sm.hotkeyDown(at: 1)
+        _ = sm.hotkeyUp(at: 1.1)
+        let boundary = try XCTUnwrap(sm.pendingDeadline)
+        r = sm.hotkeyDown(at: boundary)
+        XCTAssertEqual(r.1, [E.discardCapture, E.repostKey, E.startCapture])
+        XCTAssertEqual(sm.state, .held)
+        XCTAssertNil(sm.pendingDeadline)
+
+        // Tick exactly at the deadline fires.
+        _ = sm.hotkeyUp(at: boundary + 1)        // long hold → PTT, back to idle
+        _ = sm.hotkeyDown(at: 3)
+        _ = sm.hotkeyUp(at: 3.1)
+        let deadline = try XCTUnwrap(sm.pendingDeadline)
+        XCTAssertEqual(sm.tick(at: deadline), [E.discardCapture, E.repostKey])
+        XCTAssertEqual(sm.state, .idle)
+    }
+
+    func testInertArmsStayInert() {
+        // toggleStopping: extra down/otherKey must do nothing.
+        _ = sm.hotkeyDown(at: 0)
+        _ = sm.hotkeyUp(at: 0.1)
+        _ = sm.hotkeyDown(at: 0.2)               // toggling
+        _ = sm.hotkeyUp(at: 0.25)
+        _ = sm.hotkeyDown(at: 1)                 // toggleStopping
+        var r = sm.hotkeyDown(at: 1.01)
+        XCTAssertEqual(r.0, D.consume)
+        XCTAssertEqual(r.1, [])
+        var o = sm.otherKeyDown(at: 1.02)
+        XCTAssertEqual(o.0, D.pass)
+        XCTAssertEqual(o.1, [])
+        XCTAssertEqual(sm.state, .toggleStopping)
+        _ = sm.hotkeyUp(at: 1.1)                 // → idle
+
+        // cancelled: extra down/otherKey must do nothing.
+        _ = sm.hotkeyDown(at: 2)
+        _ = sm.otherKeyDown(at: 2.1)             // cancelled
+        r = sm.hotkeyDown(at: 2.2)
+        XCTAssertEqual(r.0, D.consume)
+        XCTAssertEqual(r.1, [])
+        o = sm.otherKeyDown(at: 2.3)
+        XCTAssertEqual(o.0, D.pass)
+        XCTAssertEqual(o.1, [])
+        XCTAssertEqual(sm.state, .cancelled)
     }
 }

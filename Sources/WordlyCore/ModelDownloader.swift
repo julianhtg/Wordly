@@ -9,6 +9,7 @@ public final class ModelDownloader: NSObject, URLSessionDownloadDelegate {
 
     private let remote: URL
     private let destination: URL
+    private var isDownloading = false  // main-thread confined, like the callbacks
     private lazy var session = URLSession(configuration: .default,
                                           delegate: self, delegateQueue: nil)
 
@@ -21,11 +22,13 @@ public final class ModelDownloader: NSObject, URLSessionDownloadDelegate {
     /// Calls back immediately if the file already looks complete (>1 GB —
     /// guards against a truncated earlier download of the 1.6 GB model).
     public func startIfNeeded() {
+        guard !isDownloading else { return }  // re-entrant call must not start a 2nd task
         let size = (try? FileManager.default.attributesOfItem(atPath: destination.path))?[.size] as? Int64 ?? 0
         if size > 1_000_000_000 {
             DispatchQueue.main.async { self.onDone?(.success(self.destination)) }
             return
         }
+        isDownloading = true
         session.downloadTask(with: remote).resume()
     }
 
@@ -53,8 +56,12 @@ public final class ModelDownloader: NSObject, URLSessionDownloadDelegate {
 
     public func urlSession(_ session: URLSession, task: URLSessionTask,
                            didCompleteWithError error: Error?) {
-        if let error {
-            DispatchQueue.main.async { self.onDone?(.failure(error)) }
+        // Always fires last (also after a successful download, with error nil):
+        // the right place to reset state and release the session+delegate pair.
+        session.finishTasksAndInvalidate()
+        DispatchQueue.main.async {
+            self.isDownloading = false
+            if let error { self.onDone?(.failure(error)) }
         }
     }
 }

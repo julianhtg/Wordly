@@ -22,6 +22,10 @@ public final class Recorder {
 
     private let engine = AVAudioEngine()
     private var samples: [Float] = []
+    // Auto-gain state for the level meter: a slowly-decaying peak the current
+    // level is normalized against, so the bars fill their range for loud and
+    // quiet mics alike. Touched only on the audio thread (single writer).
+    private var levelPeak: Float = 0.01
     private let lock = NSLock()
     // Bumped each start(); a straggling tap callback from a previous session
     // (removeTap doesn't synchronously halt in-flight callbacks) sees a stale
@@ -38,6 +42,7 @@ public final class Recorder {
         let myGeneration = generation
         samples.removeAll(keepingCapacity: true)
         lock.unlock()
+        levelPeak = 0.01  // recalibrate auto-gain each session (before the tap runs)
 
         let input = engine.inputNode
         if let uid = inputDeviceUID, let deviceID = AudioDevices.deviceID(forUID: uid),
@@ -85,10 +90,12 @@ public final class Recorder {
                 var sumSquares: Float = 0
                 for i in 0..<frames { sumSquares += channel[0][i] * channel[0][i] }
                 let rms = (sumSquares / Float(frames)).squareRoot()
-                // Perceptual (sqrt) curve with generous gain so the bars react
-                // to normal/soft talking, not just loud peaks. Paired with a low
-                // resting baseline in the waveform view.
-                let level = min(1, rms.squareRoot() * 5)
+                // Auto-gain: rise instantly to new peaks, decay slowly, and
+                // normalize against that peak (floored so background noise reads
+                // as silence). A soft gate below 20% keeps the resting line flat.
+                self.levelPeak = max(rms, self.levelPeak * 0.992)
+                let norm = rms / max(self.levelPeak, 0.01)
+                let level = norm <= 0.2 ? 0 : min(1, (norm - 0.2) / 0.8)
                 DispatchQueue.main.async { onLevel(level) }
             }
         }

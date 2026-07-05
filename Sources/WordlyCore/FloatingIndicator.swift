@@ -51,7 +51,7 @@ public final class FloatingIndicator {
     private var rescueText = ""
     private var dismissTimer: Timer?
 
-    private let pillSize = NSSize(width: 92, height: 22)
+    private let pillSize = NSSize(width: 92, height: 15)
     private let rescueSize = NSSize(width: 340, height: 132)
 
     public init() {}
@@ -189,8 +189,8 @@ public final class FloatingIndicator {
                 view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             ])
         }
-        bars.widthAnchor.constraint(equalToConstant: 62).isActive = true
-        bars.heightAnchor.constraint(equalToConstant: 12).isActive = true
+        bars.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        bars.heightAnchor.constraint(equalToConstant: 8).isActive = true
 
         rescueContainer.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(rescueContainer)

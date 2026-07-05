@@ -18,7 +18,8 @@ public final class FloatingIndicator {
     public private(set) var isShowingRescue = false
 
     private var panel: NSPanel?
-    private let bars = BarsView()
+    private let bars = WaveformView()
+    private var animationTimer: Timer?
     private let spinner: NSProgressIndicator = {
         let s = NSProgressIndicator()
         s.style = .spinning
@@ -50,7 +51,7 @@ public final class FloatingIndicator {
     private var rescueText = ""
     private var dismissTimer: Timer?
 
-    private let pillSize = NSSize(width: 132, height: 44)
+    private let pillSize = NSSize(width: 108, height: 34)
     private let rescueSize = NSSize(width: 340, height: 132)
 
     public init() {}
@@ -67,16 +68,18 @@ public final class FloatingIndicator {
         rescueContainer.isHidden = true
         resize(to: pillSize, clickable: false)
         show()
+        startWaveAnimation()
     }
 
     public func updateLevel(_ level: Float) {
         guard enabled, !bars.isHidden else { return }
-        bars.level = CGFloat(level)
+        bars.level = CGFloat(level)  // target only; the animation loop eases to it
     }
 
     public func showProcessing() {
         guard enabled else { return }
         dismissTimer?.invalidate()
+        stopWaveAnimation()
         isShowingRescue = false
         bars.isHidden = true
         rescueContainer.isHidden = true
@@ -86,9 +89,25 @@ public final class FloatingIndicator {
         show()
     }
 
+    // Drive the waveform at a steady 30 fps so it eases smoothly toward the
+    // latest level instead of stepping on each ~12/s audio callback.
+    private func startWaveAnimation() {
+        guard animationTimer == nil else { return }
+        animationTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) {
+            [weak self] _ in self?.bars.tick()
+        }
+    }
+
+    private func stopWaveAnimation() {
+        animationTimer?.invalidate()
+        animationTimer = nil
+        bars.level = 0
+    }
+
     /// Shown regardless of `enabled`: the transcript couldn't be pasted, so it
     /// must not vanish. Auto-dismisses after a while; user can Copy or close.
     public func showRescue(_ text: String) {
+        stopWaveAnimation()
         rescueText = text
         rescueTextView.string = text
         rescueTextView.scroll(NSPoint(x: 0, y: 0))
@@ -108,6 +127,7 @@ public final class FloatingIndicator {
 
     @objc public func hide() {
         dismissTimer?.invalidate()
+        stopWaveAnimation()
         isShowingRescue = false
         spinner.stopAnimation(nil)
         panel?.orderOut(nil)
@@ -159,7 +179,7 @@ public final class FloatingIndicator {
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 14
+        effect.layer?.cornerRadius = 11
         effect.layer?.masksToBounds = true
         panel.contentView = effect
 
@@ -171,8 +191,8 @@ public final class FloatingIndicator {
                 view.centerYAnchor.constraint(equalTo: effect.centerYAnchor),
             ])
         }
-        bars.widthAnchor.constraint(equalToConstant: 96).isActive = true
-        bars.heightAnchor.constraint(equalToConstant: 24).isActive = true
+        bars.widthAnchor.constraint(equalToConstant: 74).isActive = true
+        bars.heightAnchor.constraint(equalToConstant: 18).isActive = true
 
         rescueContainer.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(rescueContainer)
@@ -218,19 +238,42 @@ public final class FloatingIndicator {
     }
 }
 
-/// Simple vertical-bar level meter. Bars scale from a shared `level` with fixed
-/// per-bar weights so it reads as a live spectrum without real FFT.
-private final class BarsView: NSView {
-    var level: CGFloat = 0 { didSet { needsDisplay = true } }
-    private let weights: [CGFloat] = [0.55, 0.8, 1.0, 0.85, 0.6]
+/// Thin animated waveform. `level` is the latest input amplitude (the target);
+/// `tick()`, driven at 30 fps by the owner, eases each bar toward that target
+/// with a per-bar shimmer so motion looks fluid and organic rather than
+/// stepping once per audio callback.
+private final class WaveformView: NSView {
+    var level: CGFloat = 0
+
+    private let count = 7
+    private let envelope: [CGFloat] = [0.42, 0.62, 0.85, 1.0, 0.85, 0.62, 0.42]
+    private var heights: [CGFloat]
+    private var phase: CGFloat = 0
+
+    override init(frame: NSRect) {
+        heights = [CGFloat](repeating: 0.12, count: count)
+        super.init(frame: frame)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// One animation frame: advance the shimmer and ease bars toward the
+    /// level-scaled envelope. Idle level settles to a gentle baseline.
+    func tick() {
+        phase += 0.22
+        for i in 0..<count {
+            let shimmer = 0.85 + 0.15 * sin(phase + CGFloat(i) * 0.9)
+            let target = max(0.12, min(1, level * envelope[i] * shimmer))
+            heights[i] += (target - heights[i]) * 0.35  // critically-ish damped
+        }
+        needsDisplay = true
+    }
 
     override func draw(_ dirtyRect: NSRect) {
-        let count = weights.count
-        let gap: CGFloat = 6
+        let gap: CGFloat = 4
         let barWidth = (bounds.width - gap * CGFloat(count - 1)) / CGFloat(count)
-        NSColor.labelColor.setFill()
+        NSColor.labelColor.withAlphaComponent(0.85).setFill()
         for i in 0..<count {
-            let h = max(3, bounds.height * min(1, level * weights[i]))
+            let h = max(barWidth, bounds.height * heights[i])
             let x = CGFloat(i) * (barWidth + gap)
             let rect = NSRect(x: x, y: (bounds.height - h) / 2, width: barWidth, height: h)
             NSBezierPath(roundedRect: rect, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()

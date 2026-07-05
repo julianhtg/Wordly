@@ -4,6 +4,16 @@ import CoreGraphics
 /// Owns the CGEventTap, translates raw key events into state-machine calls,
 /// and executes the resulting effects. Main-thread only (tap runs on the main
 /// run loop).
+///
+/// Lifetime: the tap's userInfo holds an UNRETAINED self and there is no
+/// deinit teardown — once start() succeeds this instance must live for the
+/// rest of the process (AppDelegate owns it); deallocating it leaves the tap
+/// callback dangling.
+///
+/// Latency: the callbacks below fire synchronously inside the event-tap
+/// callback. They must return in microseconds — dispatch anything heavier
+/// (transcription!) to another queue, or the OS disables the tap
+/// (tapDisabledByTimeout) and keystrokes stall system-wide.
 public final class HotkeyMonitor {
     public var onStartCapture: (() -> Void)?
     public var onStopAndProcess: (() -> Void)?
@@ -107,12 +117,21 @@ public final class HotkeyMonitor {
     }
 
     /// Types the ^ the user actually wanted (single quick tap).
+    /// ponytail: when a tapPending resolves because another key was typed
+    /// ("^a" fast), that key passes through at the session tap while this ^
+    /// re-enters at the HID tap — ordering between the two is not guaranteed,
+    /// so rapid "^a" can land transposed. Accepted: fixing it means consuming
+    /// and re-synthesizing every cancelling key too.
     private func repostHotkey() {
         let source = CGEventSource(stateID: .combinedSessionState)
         for keyDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source,
                                       virtualKey: CGKeyCode(keyCode),
                                       keyDown: keyDown) else { continue }
+            // The gesture was a BARE tap (modified presses never reach the
+            // machine), so type a bare ^: without this, a still-held physical
+            // modifier from the cancelling chord would ride along.
+            event.flags = []
             event.setIntegerValueField(.eventSourceUserData,
                                        value: Injector.syntheticMarker)
             event.post(tap: .cghidEventTap)

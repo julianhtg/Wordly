@@ -5,10 +5,17 @@ import AppKit
 /// transcript with a Copy button, shown when it couldn't be pasted). The panel
 /// is non-activating and joins all Spaces, so it never steals focus from the
 /// app you're dictating into.
+///
+/// Main-thread only: every method touches AppKit and must be called on the
+/// main thread (AppDelegate already does).
 public final class FloatingIndicator {
     /// When false, listening/processing are suppressed. Rescue still shows —
     /// losing a transcript is worse than honoring the toggle.
     public var enabled = true
+
+    /// True while the rescue panel is up, so callers can avoid dismissing a
+    /// transcript the user hasn't copied yet (e.g. on the menu toggle).
+    public private(set) var isShowingRescue = false
 
     private var panel: NSPanel?
     private let bars = BarsView()
@@ -19,12 +26,22 @@ public final class FloatingIndicator {
         s.isDisplayedWhenStopped = false
         return s
     }()
-    private let rescueField: NSTextField = {
-        let f = NSTextField(wrappingLabelWithString: "")
-        f.isSelectable = true
-        f.font = .systemFont(ofSize: 12)
-        f.textColor = .labelColor
-        return f
+    private let rescueTextView: NSTextView = {
+        let tv = NSTextView()
+        tv.isEditable = false
+        tv.isSelectable = true
+        tv.drawsBackground = false
+        tv.font = .systemFont(ofSize: 12)
+        tv.textColor = .labelColor
+        tv.textContainerInset = NSSize(width: 2, height: 2)
+        return tv
+    }()
+    private lazy var rescueScroll: NSScrollView = {
+        let sv = NSScrollView()
+        sv.hasVerticalScroller = true
+        sv.drawsBackground = false
+        sv.documentView = rescueTextView
+        return sv
     }()
     private lazy var copyButton = NSButton(
         title: "Copy", target: self, action: #selector(copyRescue))
@@ -43,6 +60,7 @@ public final class FloatingIndicator {
     public func showListening() {
         guard enabled else { return }
         dismissTimer?.invalidate()
+        isShowingRescue = false
         spinner.stopAnimation(nil)
         spinner.isHidden = true
         bars.isHidden = false
@@ -59,6 +77,7 @@ public final class FloatingIndicator {
     public func showProcessing() {
         guard enabled else { return }
         dismissTimer?.invalidate()
+        isShowingRescue = false
         bars.isHidden = true
         rescueContainer.isHidden = true
         spinner.isHidden = false
@@ -71,7 +90,9 @@ public final class FloatingIndicator {
     /// must not vanish. Auto-dismisses after a while; user can Copy or close.
     public func showRescue(_ text: String) {
         rescueText = text
-        rescueField.stringValue = text
+        rescueTextView.string = text
+        rescueTextView.scroll(NSPoint(x: 0, y: 0))
+        isShowingRescue = true
         bars.isHidden = true
         spinner.stopAnimation(nil)
         spinner.isHidden = true
@@ -87,6 +108,7 @@ public final class FloatingIndicator {
 
     @objc public func hide() {
         dismissTimer?.invalidate()
+        isShowingRescue = false
         spinner.stopAnimation(nil)
         panel?.orderOut(nil)
     }
@@ -95,19 +117,22 @@ public final class FloatingIndicator {
 
     private lazy var rescueContainer: NSView = {
         let container = NSView()
-        rescueField.translatesAutoresizingMaskIntoConstraints = false
+        rescueScroll.translatesAutoresizingMaskIntoConstraints = false
         copyButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         copyButton.bezelStyle = .rounded
         closeButton.bezelStyle = .rounded
         closeButton.setButtonType(.momentaryPushIn)
-        container.addSubview(rescueField)
+        container.addSubview(rescueScroll)
         container.addSubview(copyButton)
         container.addSubview(closeButton)
         NSLayoutConstraint.activate([
-            rescueField.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
-            rescueField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
-            rescueField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            // Scrollable text fills the space above the button row, so a long
+            // rescued transcript scrolls instead of clipping behind the buttons.
+            rescueScroll.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            rescueScroll.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            rescueScroll.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            rescueScroll.bottomAnchor.constraint(equalTo: copyButton.topAnchor, constant: -8),
             copyButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
             copyButton.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
             closeButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),

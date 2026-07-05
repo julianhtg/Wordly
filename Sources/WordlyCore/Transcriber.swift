@@ -11,10 +11,15 @@ public final class Transcriber {
     private let ctx: OpaquePointer
 
     public init?(modelPath: String) {
-        var params = whisper_context_default_params()
-        params.use_gpu = true
-        params.flash_attn = true  // Metal flash attention: faster decode, turbo supports it
-        guard let ctx = whisper_init_from_file_with_params(modelPath, params) else {
+        func makeContext(flashAttn: Bool) -> OpaquePointer? {
+            var params = whisper_context_default_params()
+            params.use_gpu = true
+            params.flash_attn = flashAttn  // faster decode; not every build accepts it
+            return whisper_init_from_file_with_params(modelPath, params)
+        }
+        // Prefer flash attention, but never let it be the reason the model
+        // won't load — fall back rather than leaving the app permanently dead.
+        guard let ctx = makeContext(flashAttn: true) ?? makeContext(flashAttn: false) else {
             return nil
         }
         self.ctx = ctx

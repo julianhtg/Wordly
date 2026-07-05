@@ -12,24 +12,25 @@ public enum PasteTarget {
 
     public static func focusedAcceptsText() -> Bool {
         let system = AXUIElementCreateSystemWide()
+        // Cap the round-trip so a hung frontmost app can't freeze our main
+        // thread (this runs on the main thread after every dictation).
+        AXUIElementSetMessagingTimeout(system, 0.5)
+
         var focused: AnyObject?
         guard AXUIElementCopyAttributeValue(
                 system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let focused else { return false }
-        let element = focused as! AXUIElement
+              let focused,
+              CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
+        let element = focused as! AXUIElement  // type-checked above
 
         var role: AnyObject?
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
         if let role = role as? String, textRoles.contains(role) { return true }
 
-        // A settable AXValue or the presence of a selected-text range are strong
-        // "this is an editable text control" signals — covers web/Electron views
-        // that report generic roles (Slack, browsers, VS Code).
-        var settable = DarwinBoolean(false)
-        if AXUIElementIsAttributeSettable(
-                element, kAXValueAttribute as CFString, &settable) == .success,
-           settable.boolValue { return true }
-
+        // A selected-text range is a strong "editable text control" signal that
+        // web/Electron views (Slack, browsers, VS Code) expose even when they
+        // report generic roles — and, unlike a settable AXValue, sliders and
+        // steppers don't have it, so this avoids pasting into those.
         var selectedRange: AnyObject?
         if AXUIElementCopyAttributeValue(
                 element, kAXSelectedTextRangeAttribute as CFString, &selectedRange) == .success {

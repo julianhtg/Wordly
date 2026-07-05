@@ -244,7 +244,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         config.showIndicator.toggle()
         indicator.enabled = config.showIndicator
         indicatorItem.state = config.showIndicator ? .on : .off
-        if !config.showIndicator { indicator.hide() }
+        // Keep an unread rescue popup up even when turning the pill off.
+        if !config.showIndicator, !indicator.isShowingRescue { indicator.hide() }
         config.save()
     }
 

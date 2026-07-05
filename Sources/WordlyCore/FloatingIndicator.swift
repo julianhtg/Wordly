@@ -1,0 +1,214 @@
+import AppKit
+
+/// A small floating pill shown above the Dock while dictating. Three modes:
+/// listening (live level bars), processing (spinner), and rescue (the last
+/// transcript with a Copy button, shown when it couldn't be pasted). The panel
+/// is non-activating and joins all Spaces, so it never steals focus from the
+/// app you're dictating into.
+public final class FloatingIndicator {
+    /// When false, listening/processing are suppressed. Rescue still shows —
+    /// losing a transcript is worse than honoring the toggle.
+    public var enabled = true
+
+    private var panel: NSPanel?
+    private let bars = BarsView()
+    private let spinner: NSProgressIndicator = {
+        let s = NSProgressIndicator()
+        s.style = .spinning
+        s.controlSize = .small
+        s.isDisplayedWhenStopped = false
+        return s
+    }()
+    private let rescueField: NSTextField = {
+        let f = NSTextField(wrappingLabelWithString: "")
+        f.isSelectable = true
+        f.font = .systemFont(ofSize: 12)
+        f.textColor = .labelColor
+        return f
+    }()
+    private lazy var copyButton = NSButton(
+        title: "Copy", target: self, action: #selector(copyRescue))
+    private lazy var closeButton = NSButton(
+        title: "✕", target: self, action: #selector(hide))
+    private var rescueText = ""
+    private var dismissTimer: Timer?
+
+    private let pillSize = NSSize(width: 132, height: 44)
+    private let rescueSize = NSSize(width: 340, height: 132)
+
+    public init() {}
+
+    // MARK: Public API (main thread)
+
+    public func showListening() {
+        guard enabled else { return }
+        dismissTimer?.invalidate()
+        spinner.stopAnimation(nil)
+        spinner.isHidden = true
+        bars.isHidden = false
+        rescueContainer.isHidden = true
+        resize(to: pillSize, clickable: false)
+        show()
+    }
+
+    public func updateLevel(_ level: Float) {
+        guard enabled, !bars.isHidden else { return }
+        bars.level = CGFloat(level)
+    }
+
+    public func showProcessing() {
+        guard enabled else { return }
+        dismissTimer?.invalidate()
+        bars.isHidden = true
+        rescueContainer.isHidden = true
+        spinner.isHidden = false
+        spinner.startAnimation(nil)
+        resize(to: pillSize, clickable: false)
+        show()
+    }
+
+    /// Shown regardless of `enabled`: the transcript couldn't be pasted, so it
+    /// must not vanish. Auto-dismisses after a while; user can Copy or close.
+    public func showRescue(_ text: String) {
+        rescueText = text
+        rescueField.stringValue = text
+        bars.isHidden = true
+        spinner.stopAnimation(nil)
+        spinner.isHidden = true
+        rescueContainer.isHidden = false
+        copyButton.title = "Copy"
+        resize(to: rescueSize, clickable: true)
+        show()
+        dismissTimer?.invalidate()
+        dismissTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: false) {
+            [weak self] _ in self?.hide()
+        }
+    }
+
+    @objc public func hide() {
+        dismissTimer?.invalidate()
+        spinner.stopAnimation(nil)
+        panel?.orderOut(nil)
+    }
+
+    // MARK: Panel plumbing
+
+    private lazy var rescueContainer: NSView = {
+        let container = NSView()
+        rescueField.translatesAutoresizingMaskIntoConstraints = false
+        copyButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        copyButton.bezelStyle = .rounded
+        closeButton.bezelStyle = .rounded
+        closeButton.setButtonType(.momentaryPushIn)
+        container.addSubview(rescueField)
+        container.addSubview(copyButton)
+        container.addSubview(closeButton)
+        NSLayoutConstraint.activate([
+            rescueField.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            rescueField.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            rescueField.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            copyButton.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 14),
+            copyButton.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+            closeButton.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -14),
+            closeButton.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+        ])
+        return container
+    }()
+
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(
+            contentRect: NSRect(origin: .zero, size: pillSize),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered, defer: true)
+        panel.isFloatingPanel = true
+        panel.level = .statusBar
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+
+        let effect = NSVisualEffectView()
+        effect.material = .hudWindow
+        effect.blendingMode = .behindWindow
+        effect.state = .active
+        effect.wantsLayer = true
+        effect.layer?.cornerRadius = 14
+        effect.layer?.masksToBounds = true
+        panel.contentView = effect
+
+        for view in [bars, spinner] {  // pill modes: centered
+            view.translatesAutoresizingMaskIntoConstraints = false
+            effect.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.centerXAnchor.constraint(equalTo: effect.centerXAnchor),
+                view.centerYAnchor.constraint(equalTo: effect.centerYAnchor),
+            ])
+        }
+        bars.widthAnchor.constraint(equalToConstant: 96).isActive = true
+        bars.heightAnchor.constraint(equalToConstant: 24).isActive = true
+
+        rescueContainer.translatesAutoresizingMaskIntoConstraints = false
+        effect.addSubview(rescueContainer)
+        NSLayoutConstraint.activate([  // rescue mode: fills the panel
+            rescueContainer.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
+            rescueContainer.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+            rescueContainer.topAnchor.constraint(equalTo: effect.topAnchor),
+            rescueContainer.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
+        ])
+        return panel
+    }
+
+    private func show() {
+        let panel = panel ?? makePanel()
+        self.panel = panel
+        reposition(panel)
+        panel.orderFrontRegardless()
+    }
+
+    private func resize(to size: NSSize, clickable: Bool) {
+        let panel = panel ?? makePanel()
+        self.panel = panel
+        panel.ignoresMouseEvents = !clickable
+        var frame = panel.frame
+        frame.size = size
+        panel.setFrame(frame, display: true)
+    }
+
+    private func reposition(_ panel: NSPanel) {
+        guard let screen = NSScreen.main else { return }
+        let vf = screen.visibleFrame            // excludes Dock + menu bar
+        let size = panel.frame.size
+        let origin = NSPoint(
+            x: vf.midX - size.width / 2,
+            y: vf.minY + 24)
+        panel.setFrameOrigin(origin)
+    }
+
+    @objc private func copyRescue() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(rescueText, forType: .string)
+        copyButton.title = "Copied ✓"
+    }
+}
+
+/// Simple vertical-bar level meter. Bars scale from a shared `level` with fixed
+/// per-bar weights so it reads as a live spectrum without real FFT.
+private final class BarsView: NSView {
+    var level: CGFloat = 0 { didSet { needsDisplay = true } }
+    private let weights: [CGFloat] = [0.55, 0.8, 1.0, 0.85, 0.6]
+
+    override func draw(_ dirtyRect: NSRect) {
+        let count = weights.count
+        let gap: CGFloat = 6
+        let barWidth = (bounds.width - gap * CGFloat(count - 1)) / CGFloat(count)
+        NSColor.labelColor.setFill()
+        for i in 0..<count {
+            let h = max(3, bounds.height * min(1, level * weights[i]))
+            let x = CGFloat(i) * (barWidth + gap)
+            let rect = NSRect(x: x, y: (bounds.height - h) / 2, width: barWidth, height: h)
+            NSBezierPath(roundedRect: rect, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()
+        }
+    }
+}

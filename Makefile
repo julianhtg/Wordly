@@ -26,16 +26,22 @@ clean:
 
 FRAMEWORK_SLICE := vendor/whisper.xcframework/macos-arm64_x86_64/whisper.framework
 
-.PHONY: release app run
+.PHONY: release app run icon
 
 release: vendor/whisper.xcframework
 	swift build -c release
 
-app: release
+icon: Resources/AppIcon.icns
+
+Resources/AppIcon.icns:
+	swift scripts/make-icon.swift
+
+app: release Resources/AppIcon.icns
 	rm -rf build/Wordly.app
-	mkdir -p build/Wordly.app/Contents/MacOS build/Wordly.app/Contents/Frameworks
+	mkdir -p build/Wordly.app/Contents/MacOS build/Wordly.app/Contents/Frameworks build/Wordly.app/Contents/Resources
 	cp .build/release/Wordly build/Wordly.app/Contents/MacOS/
 	cp Resources/Info.plist build/Wordly.app/Contents/
+	cp Resources/AppIcon.icns build/Wordly.app/Contents/Resources/
 	cp -R $(FRAMEWORK_SLICE) build/Wordly.app/Contents/Frameworks/
 	xattr -cr build/Wordly.app 2>/dev/null || true
 	install_name_tool -add_rpath @executable_path/../Frameworks \

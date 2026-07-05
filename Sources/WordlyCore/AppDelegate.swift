@@ -5,18 +5,24 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var infoItem: NSMenuItem!
     private var cleanupItem: NSMenuItem!
+    private var indicatorItem: NSMenuItem!
+    private var copyLastItem: NSMenuItem!
     private var languageItems: [String: NSMenuItem] = [:]
 
     private var config = Config.load()
     private let dictionary = UserDictionary()
     private let recorder = Recorder()
+    private let indicator = FloatingIndicator()
     private var transcriber: Transcriber?
     private var monitor: HotkeyMonitor?
     private var downloader: ModelDownloader?
     private var isProcessing = false
+    private var lastTranscript = ""
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        indicator.enabled = config.showIndicator
+        recorder.onLevel = { [weak self] level in self?.indicator.updateLevel(level) }
         buildStatusItem()
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         promptForAccessibility()
@@ -42,6 +48,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         cleanupItem.state = config.cleanupEnabled ? .on : .off
         menu.addItem(cleanupItem)
 
+        indicatorItem = NSMenuItem(title: "Floating Indicator",
+                                   action: #selector(toggleIndicator), keyEquivalent: "")
+        indicatorItem.target = self
+        indicatorItem.state = config.showIndicator ? .on : .off
+        menu.addItem(indicatorItem)
+
         let languageMenu = NSMenu()
         for (title, code) in [("Auto", "auto"), ("Deutsch", "de"), ("English", "en")] {
             let item = NSMenuItem(title: title,
@@ -60,6 +72,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                                   action: #selector(editDictionary), keyEquivalent: "")
         dictItem.target = self
         menu.addItem(dictItem)
+
+        copyLastItem = NSMenuItem(title: "Copy Last Transcript",
+                                  action: #selector(copyLast), keyEquivalent: "")
+        copyLastItem.target = self
+        copyLastItem.isEnabled = false
+        menu.addItem(copyLastItem)
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Wordly",
@@ -129,6 +147,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         setInfo("Loading model…")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let transcriber = Transcriber(modelPath: url.path)
+            transcriber?.warmUp()  // compile Metal kernels before it's reachable
             DispatchQueue.main.async {
                 self?.transcriber = transcriber
                 self?.refreshInfo()
@@ -152,23 +171,30 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startCapture() {
         guard !isProcessing, transcriber != nil else { return }
         recorder.start()
-        if recorder.isRecording { setIcon("mic.fill", tint: .systemRed) }
+        if recorder.isRecording {
+            setIcon("mic.fill", tint: .systemRed)
+            indicator.showListening()
+        }
     }
 
     private func discardCapture() {
         recorder.stop(discard: true)
         // Phantom gestures during transcription must not clobber the hourglass.
-        if !isProcessing { setIcon("mic", tint: nil) }
+        if !isProcessing {
+            setIcon("mic", tint: nil)
+            indicator.hide()
+        }
     }
 
     private func stopAndProcess() {
         let samples = recorder.stop()
         guard !samples.isEmpty, let transcriber, !isProcessing else {
-            if !isProcessing { setIcon("mic", tint: nil) }
+            if !isProcessing { setIcon("mic", tint: nil); indicator.hide() }
             return
         }
         isProcessing = true
         setIcon("hourglass", tint: nil)
+        indicator.showProcessing()
         let language = config.language
         let prompt = dictionary.initialPrompt()
         let terms = dictionary.terms()
@@ -176,18 +202,33 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = config.ollamaModel
 
         Task.detached(priority: .userInitiated) { [weak self] in
-            var text = transcriber.transcribe(samples, language: language,
+            let trimmed = AudioTrim.trim(samples)
+            var text = transcriber.transcribe(trimmed, language: language,
                                               initialPrompt: prompt)
             if cleanup {
                 text = await Cleaner.clean(text, terms: terms, model: model)
             }
             let finalText = text
             await MainActor.run {
-                guard let self else { return }
-                Injector.paste(finalText)
-                self.isProcessing = false
-                self.setIcon("mic", tint: nil)
+                self?.finishDictation(finalText)
             }
+        }
+    }
+
+    /// Paste the transcript if the focused element takes text; otherwise keep
+    /// it in the rescue popup so it's never lost. Always retained for the
+    /// Copy Last Transcript menu item.
+    private func finishDictation(_ text: String) {
+        isProcessing = false
+        setIcon("mic", tint: nil)
+        guard !text.isEmpty else { indicator.hide(); return }
+        lastTranscript = text
+        copyLastItem.isEnabled = true
+        if PasteTarget.focusedAcceptsText() {
+            Injector.paste(text)
+            indicator.hide()
+        } else {
+            indicator.showRescue(text)
         }
     }
 
@@ -196,6 +237,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleCleanup() {
         config.cleanupEnabled.toggle()
         cleanupItem.state = config.cleanupEnabled ? .on : .off
+        config.save()
+    }
+
+    @objc private func toggleIndicator() {
+        config.showIndicator.toggle()
+        indicator.enabled = config.showIndicator
+        indicatorItem.state = config.showIndicator ? .on : .off
+        if !config.showIndicator { indicator.hide() }
         config.save()
     }
 
@@ -211,5 +260,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func editDictionary() {
         _ = dictionary.terms()  // ensures file + template exist
         NSWorkspace.shared.open(dictionary.url)
+    }
+
+    @objc private func copyLast() {
+        guard !lastTranscript.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(lastTranscript, forType: .string)
     }
 }

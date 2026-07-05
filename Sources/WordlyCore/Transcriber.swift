@@ -3,7 +3,10 @@ import whisper
 
 /// In-process whisper.cpp. Model loads once (seconds) and stays in RAM;
 /// transcription runs Metal-accelerated. Not thread-safe — callers serialize
-/// (AppDelegate is single-flight by design).
+/// (AppDelegate is single-flight by design). transcribe() blocks for seconds,
+/// so call it from a background queue — and this instance must outlive any
+/// in-flight call: deinit runs whisper_free, so releasing/replacing the
+/// holding property mid-transcription is a use-after-free, not a data race.
 public final class Transcriber {
     private let ctx: OpaquePointer
 

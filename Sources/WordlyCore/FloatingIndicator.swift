@@ -51,7 +51,7 @@ public final class FloatingIndicator {
     private var rescueText = ""
     private var dismissTimer: Timer?
 
-    private let pillSize = NSSize(width: 92, height: 26)
+    private let pillSize = NSSize(width: 92, height: 22)
     private let rescueSize = NSSize(width: 340, height: 132)
 
     public init() {}
@@ -174,14 +174,11 @@ public final class FloatingIndicator {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-        // Solid dark capsule (not a translucent blur — that reflected the
-        // wallpaper). Forced-dark appearance so child text/controls render light.
-        let container = NSView()
+        // Solid dark capsule drawn directly (a layer backgroundColor wasn't
+        // fully opaque and its corner radius didn't read as a true pill).
+        // Forced-dark appearance so child text/controls render light.
+        let container = CapsuleBackgroundView()
         container.appearance = NSAppearance(named: .darkAqua)
-        container.wantsLayer = true
-        container.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.96).cgColor
-        container.layer?.cornerRadius = pillSize.height / 2   // true capsule
-        container.layer?.masksToBounds = true
         panel.contentView = container
 
         for view in [bars, spinner] {  // pill modes: centered
@@ -244,6 +241,20 @@ public final class FloatingIndicator {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(rescueText, forType: .string)
         copyButton.title = "Copied ✓"
+    }
+}
+
+/// Solid dark background with fully-rounded (capsule) ends. Drawn rather than
+/// layer-tinted so it's genuinely opaque and the short sides are true
+/// semicircles, not a rounded rectangle.
+private final class CapsuleBackgroundView: NSView {
+    override var isOpaque: Bool { false }  // corners are transparent
+
+    override func draw(_ dirtyRect: NSRect) {
+        let radius = min(bounds.height / 2, 16)  // capsule when short (pill mode)
+        let path = NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius)
+        NSColor(calibratedWhite: 0.13, alpha: 1).setFill()
+        path.fill()
     }
 }
 

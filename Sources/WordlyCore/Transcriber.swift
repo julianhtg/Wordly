@@ -13,6 +13,7 @@ public final class Transcriber {
     public init?(modelPath: String) {
         var params = whisper_context_default_params()
         params.use_gpu = true
+        params.flash_attn = true  // Metal flash attention: faster decode, turbo supports it
         guard let ctx = whisper_init_from_file_with_params(modelPath, params) else {
             return nil
         }
@@ -20,6 +21,14 @@ public final class Transcriber {
     }
 
     deinit { whisper_free(ctx) }
+
+    /// Runs one throwaway transcription on silence to compile the Metal
+    /// kernels, so the user's first real dictation isn't the slow one. Call
+    /// once on a background queue after init; obeys the same serialization
+    /// contract as transcribe().
+    public func warmUp() {
+        _ = transcribe([Float](repeating: 0, count: 16000), language: "en", initialPrompt: "")
+    }
 
     /// `language`: "auto" | "de" | "en". Returns "" for silence or failure.
     public func transcribe(_ samples: [Float], language: String,

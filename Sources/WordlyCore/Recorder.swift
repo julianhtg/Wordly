@@ -7,6 +7,11 @@ import AppKit
 /// AppDelegate's single-flight gate serializes them). Only the tap callback
 /// runs on the audio thread, synchronized via `lock` + `generation`.
 public final class Recorder {
+    /// Live input level (0...1, RMS) while recording, delivered on the main
+    /// thread for the floating indicator. Cosmetic — stale values are harmless,
+    /// so it is not generation-guarded.
+    public var onLevel: ((Float) -> Void)?
+
     private let engine = AVAudioEngine()
     private var samples: [Float] = []
     private let lock = NSLock()
@@ -54,11 +59,19 @@ public final class Recorder {
             // Failure paths above stay silent on purpose: no NSLog on the
             // real-time audio thread (priority-inversion risk).
             guard status != .error, let channel = converted.floatChannelData else { return }
+            let frames = Int(converted.frameLength)
             self.lock.lock()
             defer { self.lock.unlock() }
             guard self.generation == myGeneration else { return }
             self.samples.append(contentsOf:
-                UnsafeBufferPointer(start: channel[0], count: Int(converted.frameLength)))
+                UnsafeBufferPointer(start: channel[0], count: frames))
+
+            if let onLevel = self.onLevel, frames > 0 {
+                var sumSquares: Float = 0
+                for i in 0..<frames { sumSquares += channel[0][i] * channel[0][i] }
+                let level = min(1, (sumSquares / Float(frames)).squareRoot() * 6)
+                DispatchQueue.main.async { onLevel(level) }
+            }
         }
 
         engine.prepare()

@@ -6,8 +6,23 @@ public struct Config: Codable, Equatable {
     public var ollamaModel: String = "gemma3:4b"
     public var cleanupEnabled: Bool = false
     public var language: String = "auto"      // "auto" | "de" | "en"
+    public var showIndicator: Bool = true     // floating voice widget
 
     public init() {}
+
+    // Decode field-by-field so a config.json written by an older version
+    // (missing keys) keeps its values and picks up defaults for new keys,
+    // instead of failing to decode and resetting the whole file.
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        keyCode = try c.decodeIfPresent(Int64.self, forKey: .keyCode) ?? keyCode
+        whisperModel = try c.decodeIfPresent(String.self, forKey: .whisperModel) ?? whisperModel
+        ollamaModel = try c.decodeIfPresent(String.self, forKey: .ollamaModel) ?? ollamaModel
+        cleanupEnabled = try c.decodeIfPresent(Bool.self, forKey: .cleanupEnabled) ?? cleanupEnabled
+        language = try c.decodeIfPresent(String.self, forKey: .language) ?? language
+        showIndicator = try c.decodeIfPresent(Bool.self, forKey: .showIndicator) ?? showIndicator
+    }
 
     public static let dir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/wordly", isDirectory: true)

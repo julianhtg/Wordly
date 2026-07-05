@@ -51,7 +51,7 @@ public final class FloatingIndicator {
     private var rescueText = ""
     private var dismissTimer: Timer?
 
-    private let pillSize = NSSize(width: 108, height: 34)
+    private let pillSize = NSSize(width: 92, height: 26)
     private let rescueSize = NSSize(width: 340, height: 132)
 
     public init() {}
@@ -178,8 +178,10 @@ public final class FloatingIndicator {
         effect.material = .hudWindow
         effect.blendingMode = .behindWindow
         effect.state = .active
+        // Always dark, like Wispr's Flow Bar, regardless of system theme.
+        effect.appearance = NSAppearance(named: .vibrantDark)
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 11
+        effect.layer?.cornerRadius = pillSize.height / 2   // true capsule
         effect.layer?.masksToBounds = true
         panel.contentView = effect
 
@@ -191,8 +193,8 @@ public final class FloatingIndicator {
                 view.centerYAnchor.constraint(equalTo: effect.centerYAnchor),
             ])
         }
-        bars.widthAnchor.constraint(equalToConstant: 74).isActive = true
-        bars.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        bars.widthAnchor.constraint(equalToConstant: 62).isActive = true
+        bars.heightAnchor.constraint(equalToConstant: 12).isActive = true
 
         rescueContainer.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(rescueContainer)
@@ -209,7 +211,15 @@ public final class FloatingIndicator {
         let panel = panel ?? makePanel()
         self.panel = panel
         reposition(panel)
+        let wasVisible = panel.isVisible
         panel.orderFrontRegardless()
+        if !wasVisible {  // gentle fade-in only on first appearance
+            panel.alphaValue = 0
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.16
+                panel.animator().alphaValue = 1
+            }
+        }
     }
 
     private func resize(to size: NSSize, clickable: Bool) {
@@ -250,19 +260,21 @@ private final class WaveformView: NSView {
     private var heights: [CGFloat]
     private var phase: CGFloat = 0
 
+    private let baseline: CGFloat = 0.05
+
     override init(frame: NSRect) {
-        heights = [CGFloat](repeating: 0.12, count: count)
+        heights = [CGFloat](repeating: baseline, count: count)
         super.init(frame: frame)
     }
     required init?(coder: NSCoder) { fatalError() }
 
     /// One animation frame: advance the shimmer and ease bars toward the
-    /// level-scaled envelope. Idle level settles to a gentle baseline.
+    /// level-scaled envelope. Silent input rests at a low flat line of dots.
     func tick() {
         phase += 0.22
         for i in 0..<count {
             let shimmer = 0.85 + 0.15 * sin(phase + CGFloat(i) * 0.9)
-            let target = max(0.12, min(1, level * envelope[i] * shimmer))
+            let target = max(baseline, min(1, level * envelope[i] * shimmer))
             heights[i] += (target - heights[i]) * 0.35  // critically-ish damped
         }
         needsDisplay = true
@@ -271,9 +283,9 @@ private final class WaveformView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         let gap: CGFloat = 4
         let barWidth = (bounds.width - gap * CGFloat(count - 1)) / CGFloat(count)
-        NSColor.labelColor.withAlphaComponent(0.85).setFill()
+        NSColor.white.withAlphaComponent(0.92).setFill()  // on the dark capsule
         for i in 0..<count {
-            let h = max(barWidth, bounds.height * heights[i])
+            let h = max(barWidth, bounds.height * heights[i])  // min = round dot
             let x = CGFloat(i) * (barWidth + gap)
             let rect = NSRect(x: x, y: (bounds.height - h) / 2, width: barWidth, height: h)
             NSBezierPath(roundedRect: rect, xRadius: barWidth / 2, yRadius: barWidth / 2).fill()

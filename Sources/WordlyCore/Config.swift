@@ -7,6 +7,7 @@ public struct Config: Codable, Equatable {
     public var cleanupEnabled: Bool = false
     public var language: String = "auto"      // "auto" | "de" | "en"
     public var showIndicator: Bool = true     // floating voice widget
+    public var inputDeviceUID: String? = nil  // nil = system default microphone
 
     public init() {}
 
@@ -22,6 +23,7 @@ public struct Config: Codable, Equatable {
         cleanupEnabled = try c.decodeIfPresent(Bool.self, forKey: .cleanupEnabled) ?? cleanupEnabled
         language = try c.decodeIfPresent(String.self, forKey: .language) ?? language
         showIndicator = try c.decodeIfPresent(Bool.self, forKey: .showIndicator) ?? showIndicator
+        inputDeviceUID = try c.decodeIfPresent(String.self, forKey: .inputDeviceUID) ?? inputDeviceUID
     }
 
     public static let dir = FileManager.default.homeDirectoryForCurrentUser

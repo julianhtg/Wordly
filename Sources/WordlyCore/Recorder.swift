@@ -1,5 +1,7 @@
 import AVFoundation
 import AppKit
+import AudioToolbox
+import CoreAudio
 
 /// Captures microphone audio as 16 kHz mono Float32 (what whisper.cpp wants),
 /// accumulated in RAM. Dictation is seconds to minutes — no temp files.
@@ -11,6 +13,12 @@ public final class Recorder {
     /// thread for the floating indicator. Cosmetic — stale values are harmless,
     /// so it is not generation-guarded.
     public var onLevel: ((Float) -> Void)?
+
+    /// UID of the microphone to record from; nil = system default. Applied on
+    /// the next start(). ponytail: switching mid-session relies on the engine
+    /// being stopped between recordings (it always is); relaunch if a hot-swap
+    /// ever misbehaves.
+    public var inputDeviceUID: String?
 
     private let engine = AVAudioEngine()
     private var samples: [Float] = []
@@ -32,6 +40,13 @@ public final class Recorder {
         lock.unlock()
 
         let input = engine.inputNode
+        if let uid = inputDeviceUID, let deviceID = AudioDevices.deviceID(forUID: uid),
+           let audioUnit = input.audioUnit {
+            var dev = deviceID
+            AudioUnitSetProperty(audioUnit, kAudioOutputUnitProperty_CurrentDevice,
+                                 kAudioUnitScope_Global, 0, &dev,
+                                 UInt32(MemoryLayout<AudioDeviceID>.size))
+        }
         let inputFormat = input.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0,
               let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
@@ -70,9 +85,10 @@ public final class Recorder {
                 var sumSquares: Float = 0
                 for i in 0..<frames { sumSquares += channel[0][i] * channel[0][i] }
                 let rms = (sumSquares / Float(frames)).squareRoot()
-                // Perceptual (sqrt) curve: expands quiet speech so the bars
-                // react to normal/soft talking, not just loud peaks.
-                let level = min(1, rms.squareRoot() * 2.3)
+                // Perceptual (sqrt) curve with generous gain so the bars react
+                // to normal/soft talking, not just loud peaks. Paired with a low
+                // resting baseline in the waveform view.
+                let level = min(1, rms.squareRoot() * 4)
                 DispatchQueue.main.async { onLevel(level) }
             }
         }

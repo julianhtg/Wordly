@@ -1,12 +1,13 @@
 import AppKit
 import AVFoundation
 
-public final class AppDelegate: NSObject, NSApplicationDelegate {
+public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private var infoItem: NSMenuItem!
     private var cleanupItem: NSMenuItem!
     private var indicatorItem: NSMenuItem!
     private var copyLastItem: NSMenuItem!
+    private var micMenu: NSMenu!
     private var languageItems: [String: NSMenuItem] = [:]
 
     private var config = Config.load()
@@ -22,6 +23,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         indicator.enabled = config.showIndicator
+        recorder.inputDeviceUID = config.inputDeviceUID
         recorder.onLevel = { [weak self] level in self?.indicator.updateLevel(level) }
         buildStatusItem()
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
@@ -67,6 +69,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let languageRoot = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         menu.setSubmenu(languageMenu, for: languageRoot)
         menu.addItem(languageRoot)
+
+        micMenu = NSMenu()
+        micMenu.delegate = self  // refreshes the device list each time it opens
+        rebuildMicMenu()
+        let micRoot = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        menu.setSubmenu(micMenu, for: micRoot)
+        menu.addItem(micRoot)
 
         let dictItem = NSMenuItem(title: "Edit Dictionary…",
                                   action: #selector(editDictionary), keyEquivalent: "")
@@ -256,6 +265,39 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             item.state = itemCode == code ? .on : .off
         }
         config.save()
+    }
+
+    // MARK: Microphone selection
+
+    private func rebuildMicMenu() {
+        micMenu.removeAllItems()
+        let defaultItem = NSMenuItem(title: "System Default",
+                                     action: #selector(pickMicrophone(_:)), keyEquivalent: "")
+        defaultItem.target = self
+        defaultItem.representedObject = ""  // empty == system default
+        defaultItem.state = config.inputDeviceUID == nil ? .on : .off
+        micMenu.addItem(defaultItem)
+        micMenu.addItem(.separator())
+        for device in AudioDevices.inputs() {
+            let item = NSMenuItem(title: device.name,
+                                  action: #selector(pickMicrophone(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = device.uid
+            item.state = config.inputDeviceUID == device.uid ? .on : .off
+            micMenu.addItem(item)
+        }
+    }
+
+    @objc private func pickMicrophone(_ sender: NSMenuItem) {
+        let uid = sender.representedObject as? String ?? ""
+        config.inputDeviceUID = uid.isEmpty ? nil : uid
+        recorder.inputDeviceUID = config.inputDeviceUID
+        config.save()
+        rebuildMicMenu()
+    }
+
+    public func menuNeedsUpdate(_ menu: NSMenu) {
+        if menu === micMenu { rebuildMicMenu() }
     }
 
     @objc private func editDictionary() {

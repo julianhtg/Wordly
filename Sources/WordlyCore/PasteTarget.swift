@@ -27,15 +27,19 @@ public enum PasteTarget {
         AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
         if let role = role as? String, textRoles.contains(role) { return true }
 
-        // A selected-text range is a strong "editable text control" signal that
-        // web/Electron views (Slack, browsers, VS Code) expose even when they
-        // report generic roles — and, unlike a settable AXValue, sliders and
-        // steppers don't have it, so this avoids pasting into those.
+        // Generic/web element: accept only if it's genuinely an editable text
+        // region — a selected-text range AND a settable value. A focused
+        // non-editable element (web content, a list row, a button) can still
+        // expose a selection range, and pasting there sends ⌘V into the void
+        // with no rescue; requiring editability routes those to the popup
+        // instead. Sliders/steppers have a settable value but no text range, so
+        // this excludes them too.
         var selectedRange: AnyObject?
-        if AXUIElementCopyAttributeValue(
-                element, kAXSelectedTextRangeAttribute as CFString, &selectedRange) == .success {
-            return true
-        }
-        return false
+        let hasSelectedRange = AXUIElementCopyAttributeValue(
+            element, kAXSelectedTextRangeAttribute as CFString, &selectedRange) == .success
+        var settable = DarwinBoolean(false)
+        let valueSettable = AXUIElementIsAttributeSettable(
+            element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
+        return hasSelectedRange && valueSettable
     }
 }

@@ -29,8 +29,26 @@ fully offline.
    Accessibility. The menu bar icon shows a struck-through mic until granted
    (the app retries automatically — no restart needed).
 
-Rebuilding the app (ad-hoc signature) can invalidate the Accessibility grant:
-remove and re-add Wordly in that list if the hotkey goes dead after a rebuild.
+### Make permissions stick across rebuilds
+
+By default the app is ad-hoc signed, which gets a new code hash on every
+rebuild — macOS treats each rebuild as a new app and re-asks for Accessibility
+and Microphone every time. To fix that permanently, create a stable
+self-signed identity once:
+
+```bash
+make sign-setup   # asks for your login password once, to trust the cert
+make app          # now signs with that identity
+```
+
+Then grant Accessibility one final time (the identity changed) and it sticks
+across all future rebuilds. After granting, quit and relaunch Wordly once so
+the event tap picks up the new permission.
+
+If the hotkey is dead even though Wordly looks granted, you likely have stale
+duplicate "Wordly" rows from earlier ad-hoc builds: remove every Wordly entry
+under System Settings → Privacy & Security → Accessibility, then re-add the
+current build and relaunch.
 
 ## Usage
 

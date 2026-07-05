@@ -25,8 +25,9 @@ clean:
 	rm -rf .build build
 
 FRAMEWORK_SLICE := vendor/whisper.xcframework/macos-arm64_x86_64/whisper.framework
+SIGN_ID := Wordly Local Signing
 
-.PHONY: release app run icon
+.PHONY: release app run icon sign-setup
 
 release: vendor/whisper.xcframework
 	swift build -c release
@@ -46,7 +47,17 @@ app: release Resources/AppIcon.icns
 	xattr -cr build/Wordly.app 2>/dev/null || true
 	install_name_tool -add_rpath @executable_path/../Frameworks \
 		build/Wordly.app/Contents/MacOS/Wordly 2>/dev/null || true
-	codesign --force --deep --sign - build/Wordly.app
+	@if security find-identity -v -p codesigning | grep -q "$(SIGN_ID)"; then \
+		echo "Signing with stable identity: $(SIGN_ID)"; \
+		codesign --force --deep --sign "$(SIGN_ID)" build/Wordly.app; \
+	else \
+		echo "No stable identity — ad-hoc signing. Permission grants will NOT"; \
+		echo "survive rebuilds; run 'make sign-setup' once to fix that."; \
+		codesign --force --deep --sign - build/Wordly.app; \
+	fi
+
+sign-setup:
+	bash scripts/setup-signing.sh
 
 run: app
 	open build/Wordly.app

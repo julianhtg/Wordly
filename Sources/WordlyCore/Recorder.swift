@@ -69,7 +69,10 @@ public final class Recorder {
             if let onLevel = self.onLevel, frames > 0 {
                 var sumSquares: Float = 0
                 for i in 0..<frames { sumSquares += channel[0][i] * channel[0][i] }
-                let level = min(1, (sumSquares / Float(frames)).squareRoot() * 6)
+                let rms = (sumSquares / Float(frames)).squareRoot()
+                // Perceptual (sqrt) curve: expands quiet speech so the bars
+                // react to normal/soft talking, not just loud peaks.
+                let level = min(1, rms.squareRoot() * 2.3)
                 DispatchQueue.main.async { onLevel(level) }
             }
         }

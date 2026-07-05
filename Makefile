@@ -43,18 +43,18 @@ app: release Resources/AppIcon.icns
 	cp Resources/Info.plist build/Wordly.app/Contents/
 	cp Resources/AppIcon.icns build/Wordly.app/Contents/Resources/
 	cp -R $(FRAMEWORK_SLICE) build/Wordly.app/Contents/Frameworks/
-	xattr -cr build/Wordly.app 2>/dev/null || true
 	install_name_tool -add_rpath @executable_path/../Frameworks \
 		build/Wordly.app/Contents/MacOS/Wordly 2>/dev/null || true
 	@ID="$$(security find-identity -v -p codesigning | sed -nE 's/.*"(Developer ID Application[^"]*|Apple Development[^"]*|Wordly Local Signing)".*/\1/p' | head -1)"; \
-	if [ -n "$$ID" ]; then \
-		echo "Signing with stable identity: $$ID"; \
-		codesign --force --deep --sign "$$ID" build/Wordly.app; \
-	else \
-		echo "No stable identity — ad-hoc signing. Permission grants will NOT"; \
-		echo "survive rebuilds; run 'make sign-setup' once to fix that."; \
-		codesign --force --deep --sign - build/Wordly.app; \
-	fi
+	if [ -n "$$ID" ]; then echo "Signing with stable identity: $$ID"; \
+	else echo "No stable identity — ad-hoc signing (grants won't survive rebuilds; run 'make sign-setup')"; ID="-"; fi; \
+	signed=0; \
+	for attempt in 1 2 3; do \
+		xattr -cr build/Wordly.app 2>/dev/null || true; \
+		if codesign --force --deep --sign "$$ID" build/Wordly.app 2>/dev/null; then signed=1; break; fi; \
+		echo "codesign hit an iCloud xattr race; stripping and retrying ($$attempt)…"; \
+	done; \
+	[ $$signed = 1 ] || { echo "codesign failed after 3 tries"; exit 1; }
 
 sign-setup:
 	bash scripts/setup-signing.sh

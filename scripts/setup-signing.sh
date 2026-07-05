@@ -26,6 +26,7 @@ if [ ! -f "$DIR/cert.pem" ] || [ ! -f "$DIR/key.pem" ]; then
     echo "→ Creating self-signed code-signing certificate…"
     openssl req -x509 -newkey rsa:2048 -keyout "$DIR/key.pem" -nodes -out "$DIR/cert.pem" \
         -days 3650 -subj "/CN=$NAME" \
+        -addext "keyUsage=critical,digitalSignature" \
         -addext "extendedKeyUsage=critical,codeSigning" \
         -addext "basicConstraints=critical,CA:false"
 fi

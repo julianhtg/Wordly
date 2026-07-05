@@ -157,13 +157,14 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func discardCapture() {
         recorder.stop(discard: true)
-        setIcon("mic", tint: nil)
+        // Phantom gestures during transcription must not clobber the hourglass.
+        if !isProcessing { setIcon("mic", tint: nil) }
     }
 
     private func stopAndProcess() {
         let samples = recorder.stop()
         guard !samples.isEmpty, let transcriber, !isProcessing else {
-            setIcon("mic", tint: nil)
+            if !isProcessing { setIcon("mic", tint: nil) }
             return
         }
         isProcessing = true
@@ -180,9 +181,10 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             if cleanup {
                 text = await Cleaner.clean(text, terms: terms, model: model)
             }
+            let finalText = text
             await MainActor.run {
                 guard let self else { return }
-                Injector.paste(text)
+                Injector.paste(finalText)
                 self.isProcessing = false
                 self.setIcon("mic", tint: nil)
             }

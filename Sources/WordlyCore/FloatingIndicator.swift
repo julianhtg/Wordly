@@ -174,35 +174,34 @@ public final class FloatingIndicator {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-        let effect = NSVisualEffectView()
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        // Always dark, like Wispr's Flow Bar, regardless of system theme.
-        effect.appearance = NSAppearance(named: .vibrantDark)
-        effect.wantsLayer = true
-        effect.layer?.cornerRadius = pillSize.height / 2   // true capsule
-        effect.layer?.masksToBounds = true
-        panel.contentView = effect
+        // Solid dark capsule (not a translucent blur — that reflected the
+        // wallpaper). Forced-dark appearance so child text/controls render light.
+        let container = NSView()
+        container.appearance = NSAppearance(named: .darkAqua)
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.96).cgColor
+        container.layer?.cornerRadius = pillSize.height / 2   // true capsule
+        container.layer?.masksToBounds = true
+        panel.contentView = container
 
         for view in [bars, spinner] {  // pill modes: centered
             view.translatesAutoresizingMaskIntoConstraints = false
-            effect.addSubview(view)
+            container.addSubview(view)
             NSLayoutConstraint.activate([
-                view.centerXAnchor.constraint(equalTo: effect.centerXAnchor),
-                view.centerYAnchor.constraint(equalTo: effect.centerYAnchor),
+                view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+                view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             ])
         }
         bars.widthAnchor.constraint(equalToConstant: 62).isActive = true
         bars.heightAnchor.constraint(equalToConstant: 12).isActive = true
 
         rescueContainer.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(rescueContainer)
+        container.addSubview(rescueContainer)
         NSLayoutConstraint.activate([  // rescue mode: fills the panel
-            rescueContainer.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            rescueContainer.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-            rescueContainer.topAnchor.constraint(equalTo: effect.topAnchor),
-            rescueContainer.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
+            rescueContainer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            rescueContainer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            rescueContainer.topAnchor.constraint(equalTo: container.topAnchor),
+            rescueContainer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         return panel
     }

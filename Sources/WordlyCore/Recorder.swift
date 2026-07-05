@@ -88,7 +88,7 @@ public final class Recorder {
                 // Perceptual (sqrt) curve with generous gain so the bars react
                 // to normal/soft talking, not just loud peaks. Paired with a low
                 // resting baseline in the waveform view.
-                let level = min(1, rms.squareRoot() * 4)
+                let level = min(1, rms.squareRoot() * 5)
                 DispatchQueue.main.async { onLevel(level) }
             }
         }

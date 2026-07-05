@@ -23,3 +23,24 @@ test: vendor/whisper.xcframework
 
 clean:
 	rm -rf .build build
+
+FRAMEWORK_SLICE := vendor/whisper.xcframework/macos-arm64_x86_64/whisper.framework
+
+.PHONY: release app run
+
+release: vendor/whisper.xcframework
+	swift build -c release
+
+app: release
+	rm -rf build/Wordly.app
+	mkdir -p build/Wordly.app/Contents/MacOS build/Wordly.app/Contents/Frameworks
+	cp .build/release/Wordly build/Wordly.app/Contents/MacOS/
+	cp Resources/Info.plist build/Wordly.app/Contents/
+	cp -R $(FRAMEWORK_SLICE) build/Wordly.app/Contents/Frameworks/
+	xattr -rc build/Wordly.app 2>/dev/null || true
+	install_name_tool -add_rpath @executable_path/../Frameworks \
+		build/Wordly.app/Contents/MacOS/Wordly 2>/dev/null || true
+	codesign --force --deep --sign - build/Wordly.app
+
+run: app
+	open build/Wordly.app

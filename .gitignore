@@ -6,3 +6,6 @@ vendor/
 bench/audio/
 .DS_Store
 Resources/AppIcon.iconset/
+
+# Claude Code local settings
+.claude/

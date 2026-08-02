@@ -162,6 +162,10 @@ The app icon is generated once by `make icon` (→ `Resources/AppIcon.icns`);
 
 ## Credits
 
+Wordly itself is MIT (see `LICENSE`). Neither model is redistributed here —
+both are downloaded on first launch — so their terms apply to what you fetch,
+not to this repository:
+
 * [whisper.cpp](https://github.com/ggml-org/whisper.cpp) (MIT) with OpenAI's
   `large-v3-turbo` weights (MIT).
 * [FluidAudio](https://github.com/FluidInference/FluidAudio) (Apache 2.0) running

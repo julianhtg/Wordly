@@ -199,6 +199,18 @@ own voice.
 - **Injector** pastes through the clipboard and restores the previous contents,
   images included — dictating never costs you what you had copied.
 
+### Where things live
+
+| | |
+|---|---|
+| `Sources/WordlyCore/` | Everything that does the work: hotkey, recorder, the two engines, menu bar, floating pill |
+| `Sources/Wordly/` | The app's entry point — seven lines that hand off to `AppDelegate` |
+| `Sources/WordlyBench/` | The benchmark harness behind the [Speed](#-speed) table. Dev-only; never ships in the app |
+| `Tests/` | 51 unit tests over the pure logic |
+| `scripts/` | Icon generation, the one-time signing setup, the TTS bench corpus |
+| `Resources/` | `Info.plist` and the app icon |
+| `docs/` | Banner, demo GIF, and the design note behind the measurements |
+
 ---
 
 ## 🔧 Configuration

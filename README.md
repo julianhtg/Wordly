@@ -84,7 +84,7 @@ always processes a full 30-second window, so a two-second "yes, send it" costs
 exactly as much as half a minute of talking. Shortening that window is the
 obvious fix and it doubles the error rate — that experiment and three others
 that failed are written up in the
-[design note](docs/superpowers/specs/2026-08-02-wordly-speech-pipeline-design.md).
+[design note](docs/design/speech-pipeline.md).
 
 ---
 

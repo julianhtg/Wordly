@@ -2,5 +2,7 @@
 build/
 vendor/
 *.bin
+# bench corpus: regenerate with scripts/make-bench-audio.sh
+bench/audio/
 .DS_Store
 Resources/AppIcon.iconset/

@@ -8,17 +8,22 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
     private var indicatorItem: NSMenuItem!
     private var copyLastItem: NSMenuItem!
     private var micMenu: NSMenu!
+    private var languageRoot: NSMenuItem!
+    private var autoLanguageItem: NSMenuItem!
     private var languageItems: [String: NSMenuItem] = [:]
+    private var engineItems: [String: NSMenuItem] = [:]
 
     private var config = Config.load()
     private let dictionary = UserDictionary()
     private let recorder = Recorder()
     private let indicator = FloatingIndicator()
-    private var transcriber: Transcriber?
+    private var engine: (any SpeechEngine)?
+    private var isLoadingEngine = false
     private var monitor: HotkeyMonitor?
     private var downloader: ModelDownloader?
     private var isProcessing = false
     private var lastTranscript = ""
+    private var lastRun = ""  // "de · 0.9 s", shown in the menu's info line
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -29,7 +34,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         AVCaptureDevice.requestAccess(for: .audio) { _ in }
         promptForAccessibility()
         startMonitorWhenTrusted()
-        ensureModel()
+        ensureEngine()
+    }
+
+    public func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // ponytail: whisper.cpp's prebuilt Metal backend aborts in its static
+        // destructor at normal exit (ggml_metal_rsets_free -> ggml_abort), so the
+        // app SIGABRTs on every quit. We do no cleanup on quit (config saves on
+        // change), so exit immediately and skip the C++ finalizers that crash.
+        _exit(0)
     }
 
     // MARK: Status item + menu
@@ -56,19 +69,25 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         indicatorItem.state = config.showIndicator ? .on : .off
         menu.addItem(indicatorItem)
 
-        let languageMenu = NSMenu()
-        for (title, code) in [("Auto", "auto"), ("Deutsch", "de"), ("English", "en")] {
-            let item = NSMenuItem(title: title,
-                                  action: #selector(pickLanguage(_:)), keyEquivalent: "")
-            item.target = self
-            item.representedObject = code
-            item.state = config.language == code ? .on : .off
-            languageMenu.addItem(item)
-            languageItems[code] = item
-        }
-        let languageRoot = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
-        menu.setSubmenu(languageMenu, for: languageRoot)
+        languageRoot = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
+        menu.setSubmenu(buildLanguageMenu(), for: languageRoot)
         menu.addItem(languageRoot)
+        refreshLanguageMenu()
+
+        let engineMenu = NSMenu()
+        for (title, value) in [("Automatic", "auto"),
+                               ("Parakeet — fast", EngineRouting.fast),
+                               ("Whisper — every language", EngineRouting.general)] {
+            let item = NSMenuItem(title: title, action: #selector(pickEngine(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = value
+            item.state = config.engine == value ? .on : .off
+            engineMenu.addItem(item)
+            engineItems[value] = item
+        }
+        let engineRoot = NSMenuItem(title: "Engine", action: nil, keyEquivalent: "")
+        menu.setSubmenu(engineMenu, for: engineRoot)
+        menu.addItem(engineRoot)
 
         micMenu = NSMenu()
         micMenu.delegate = self  // refreshes the device list each time it opens
@@ -127,13 +146,50 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         }
     }
 
-    // MARK: Model lifecycle
+    // MARK: Engine lifecycle
 
-    private func ensureModel() {
+    /// Loads whichever engine the current language selection needs. Cheap to
+    /// call repeatedly — it returns immediately unless the answer changed, so
+    /// toggling a language can just call it. Whisper's 1.6 GB model is only
+    /// fetched when a language outside Parakeet's set is actually selected.
+    private func ensureEngine() {
+        guard !isLoadingEngine else { return }
+        let wanted = EngineRouting.engineName(preference: config.engine,
+                                              languages: config.languages,
+                                              fastLanguages: ParakeetEngine.supported)
+        guard engine?.name != wanted else { return }
+        engine = nil
+        isLoadingEngine = true
+        if wanted == EngineRouting.fast { loadParakeet() } else { loadWhisper() }
+    }
+
+    private func loadParakeet() {
+        setInfo("Loading speech models…")
+        // FluidAudio calls this from whatever thread it likes, so it captures
+        // nothing and looks the delegate up on the main thread instead — an
+        // AppDelegate reference is not safe to carry into a @Sendable closure.
+        let report: @Sendable (Int) -> Void = { percent in
+            DispatchQueue.main.async {
+                (NSApp.delegate as? AppDelegate)?
+                    .setInfo("Downloading speech models… \(percent)%")
+            }
+        }
+        Task.detached(priority: .userInitiated) { [weak self] in
+            do {
+                let engine = try await ParakeetEngine.load(progress: report)
+                await MainActor.run { [weak self] in self?.engineLoaded(engine) }
+            } catch {
+                wordlyLog("Wordly: parakeet failed to load: \(error)")
+                await MainActor.run { [weak self] in
+                    self?.engineFailed("Speech models failed — see Console")
+                }
+            }
+        }
+    }
+
+    private func loadWhisper() {
         let url = config.modelURL
-        if FileManager.default.fileExists(atPath: url.path) {
-            loadModel(url)
-        } else {
+        guard FileManager.default.fileExists(atPath: url.path) else {
             setInfo("Downloading model… 0%")
             let downloader = ModelDownloader(model: config.whisperModel, destination: url)
             downloader.onProgress = { [weak self] pct in
@@ -141,36 +197,51 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
             }
             downloader.onDone = { [weak self] result in
                 switch result {
-                case .success(let url): self?.loadModel(url)
+                case .success: self?.loadWhisper()
                 case .failure(let error):
-                    self?.setInfo("Model download failed — quit & relaunch to retry")
-                    NSLog("Wordly: model download failed: \(error)")
+                    self?.engineFailed("Model download failed — quit & relaunch to retry")
+                    wordlyLog("Wordly: model download failed: \(error)")
                 }
             }
             self.downloader = downloader
             downloader.startIfNeeded()
+            return
         }
-    }
-
-    private func loadModel(_ url: URL) {
         setInfo("Loading model…")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let transcriber = Transcriber(modelPath: url.path)
-            transcriber?.warmUp()  // compile Metal kernels before it's reachable
-            DispatchQueue.main.async {
-                self?.transcriber = transcriber
-                self?.refreshInfo()
-                if transcriber == nil { self?.setInfo("Model failed to load") }
+            let engine = WhisperEngine.load(modelPath: url.path)  // compiles Metal kernels
+            DispatchQueue.main.async { [weak self] in
+                guard let engine else {
+                    self?.engineFailed("Model failed to load")
+                    return
+                }
+                self?.engineLoaded(engine)
             }
         }
     }
 
+    private func engineLoaded(_ engine: SpeechEngine) {
+        self.engine = engine
+        isLoadingEngine = false
+        wordlyLog("Wordly: engine ready — \(engine.name)")
+        refreshInfo()
+        // The selection may have changed while this was loading; ensureEngine
+        // returns immediately if it didn't, and can't recurse further than the
+        // one other engine.
+        ensureEngine()
+    }
+
+    private func engineFailed(_ message: String) {
+        isLoadingEngine = false
+        setInfo(message)
+    }
+
     private func refreshInfo() {
-        if transcriber == nil { return }  // model status text owns the line until ready
+        if engine == nil { return }  // loading status text owns the line until ready
         if monitor == nil {
             setInfo("Grant Accessibility, then wait…")
         } else {
-            setInfo("Ready — hold ^ to dictate")
+            setInfo(lastRun.isEmpty ? "Ready — hold ^ to dictate" : "Ready — last: \(lastRun)")
             setIcon("mic", tint: nil)
         }
     }
@@ -178,7 +249,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
     // MARK: Dictation pipeline
 
     private func startCapture() {
-        guard !isProcessing, transcriber != nil else { return }
+        guard !isProcessing, engine != nil else { return }
         recorder.start()
         if recorder.isRecording {
             setIcon("mic.fill", tint: .systemRed)
@@ -197,29 +268,40 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
 
     private func stopAndProcess() {
         let samples = recorder.stop()
-        guard !samples.isEmpty, let transcriber, !isProcessing else {
+        guard !samples.isEmpty, let engine, !isProcessing else {
             if !isProcessing { setIcon("mic", tint: nil); indicator.hide() }
             return
         }
         isProcessing = true
         setIcon("hourglass", tint: nil)
         indicator.showProcessing()
-        let language = config.language
+        let languages = config.languages
         let prompt = dictionary.initialPrompt()
         let terms = dictionary.terms()
         let cleanup = config.cleanupEnabled
         let model = config.ollamaModel
 
+        // Timed from here, not from inside the model: this is the wait the user
+        // actually feels — trim, transcribe, optional cleanup, hop back.
+        let started = DispatchTime.now().uptimeNanoseconds
+
         Task.detached(priority: .userInitiated) { [weak self] in
             let trimmed = AudioTrim.trim(samples)
-            var text = transcriber.transcribe(trimmed, language: language,
-                                              initialPrompt: prompt)
+            let result = await engine.transcribe(trimmed, languages: languages,
+                                                 initialPrompt: prompt)
+            var text = result.text
             if cleanup {
-                text = await Cleaner.clean(text, terms: terms, model: model)
+                text = await Cleaner.clean(text, terms: terms,
+                                           language: result.language, model: model)
             }
             let finalText = text
-            await MainActor.run {
-                self?.finishDictation(finalText)
+            let elapsed = Double(DispatchTime.now().uptimeNanoseconds - started) / 1e9
+            wordlyLog(String(format: "Wordly: dictation %.0fms end-to-end (%.1fs audio, %d chars)",
+                         elapsed * 1000, Double(samples.count) / 16000, finalText.count))
+            // Re-capture weakly here rather than reaching for the outer task's
+            // captured `self` — that reference is what Swift 6 rejects.
+            await MainActor.run { [weak self] in
+                self?.finishDictation(finalText, language: result.language, elapsed: elapsed)
             }
         }
     }
@@ -227,9 +309,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
     /// Paste the transcript if the focused element takes text; otherwise keep
     /// it in the rescue popup so it's never lost. Always retained for the
     /// Copy Last Transcript menu item.
-    private func finishDictation(_ text: String) {
+    private func finishDictation(_ text: String, language: String, elapsed: TimeInterval) {
         isProcessing = false
         setIcon("mic", tint: nil)
+        // The menu line doubles as the "what just happened" readout: which
+        // language it settled on, and how long the user waited for it.
+        lastRun = String(format: "%@ · %.1f s", language.isEmpty ? "?" : language, elapsed)
+        refreshInfo()
         guard !text.isEmpty else { indicator.hide(); return }
         lastTranscript = text
         copyLastItem.isEnabled = true
@@ -258,13 +344,80 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
         config.save()
     }
 
-    @objc private func pickLanguage(_ sender: NSMenuItem) {
-        guard let code = sender.representedObject as? String else { return }
-        config.language = code
-        for (itemCode, item) in languageItems {
-            item.state = itemCode == code ? .on : .off
+    // MARK: Languages
+
+    /// The languages Whisper handles well go up top; the rest stay reachable
+    /// but out of the way. Both lists come from the model's own table, so they
+    /// cannot drift from what it actually supports.
+    private func buildLanguageMenu() -> NSMenu {
+        let menu = NSMenu()
+        autoLanguageItem = NSMenuItem(title: "Auto — all languages",
+                                      action: #selector(pickAllLanguages), keyEquivalent: "")
+        autoLanguageItem.target = self
+        menu.addItem(autoLanguageItem)
+        menu.addItem(.separator())
+
+        let common = Languages.all.filter { Languages.common.contains($0.code) }
+        for language in common.sorted(by: { $0.title < $1.title }) {
+            menu.addItem(languageItem(language))
         }
+        menu.addItem(.separator())
+
+        let rest = NSMenu()
+        for language in Languages.all.filter({ !Languages.common.contains($0.code) })
+            .sorted(by: { $0.title < $1.title }) {
+            rest.addItem(languageItem(language))
+        }
+        let restRoot = NSMenuItem(title: "All languages…", action: nil, keyEquivalent: "")
+        menu.setSubmenu(rest, for: restRoot)
+        menu.addItem(restRoot)
+        return menu
+    }
+
+    private func languageItem(_ language: Languages.Language) -> NSMenuItem {
+        let item = NSMenuItem(title: language.title,
+                              action: #selector(toggleLanguage(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = language.code
+        languageItems[language.code] = item
+        return item
+    }
+
+    @objc private func toggleLanguage(_ sender: NSMenuItem) {
+        guard let code = sender.representedObject as? String else { return }
+        if let index = config.languages.firstIndex(of: code) {
+            config.languages.remove(at: index)
+        } else {
+            config.languages.append(code)  // order matters: the first is the fallback
+        }
+        refreshLanguageMenu()
         config.save()
+        ensureEngine()  // the selection may have moved the work to the other engine
+    }
+
+    @objc private func pickAllLanguages() {
+        config.languages = []
+        refreshLanguageMenu()
+        config.save()
+        ensureEngine()
+    }
+
+    @objc private func pickEngine(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String else { return }
+        config.engine = value
+        for (name, item) in engineItems { item.state = name == value ? .on : .off }
+        config.save()
+        ensureEngine()
+    }
+
+    private func refreshLanguageMenu() {
+        for (code, item) in languageItems {
+            item.state = config.languages.contains(code) ? .on : .off
+        }
+        autoLanguageItem.state = config.languages.isEmpty ? .on : .off
+        let summary = config.languages.isEmpty
+            ? "Auto" : config.languages.map { $0.uppercased() }.joined(separator: ", ")
+        languageRoot.title = "Language (\(summary))"
     }
 
     // MARK: Microphone selection

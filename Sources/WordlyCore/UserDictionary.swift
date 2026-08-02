@@ -34,8 +34,11 @@ public final class UserDictionary {
         return cachedTerms
     }
 
+    /// Bare terms, no carrier sentence: whisper continues the prompt as if it
+    /// were text it had just transcribed, so an English "Glossary: …" wrapper
+    /// pulls the output toward English when you dictate in another language.
     public func initialPrompt() -> String {
         let t = terms()
-        return t.isEmpty ? "" : "Glossary: \(t.joined(separator: ", "))."
+        return t.isEmpty ? "" : t.joined(separator: ", ") + "."
     }
 }

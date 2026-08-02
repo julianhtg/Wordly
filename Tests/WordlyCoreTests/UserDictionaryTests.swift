@@ -39,7 +39,7 @@ final class UserDictionaryTests: XCTestCase {
 
     func testInitialPrompt() throws {
         try "Wordly\nOllama\n".write(to: url, atomically: true, encoding: .utf8)
-        XCTAssertEqual(UserDictionary(url: url).initialPrompt(), "Glossary: Wordly, Ollama.")
+        XCTAssertEqual(UserDictionary(url: url).initialPrompt(), "Wordly, Ollama.")
         try "".write(to: url, atomically: true, encoding: .utf8)
         XCTAssertEqual(UserDictionary(url: url).initialPrompt(), "")
     }

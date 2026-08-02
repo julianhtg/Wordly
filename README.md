@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/banner.jpg" alt="Wordly — global dictation, fully local, free forever" width="100%">
+
 # 🎙️ Wordly
 
 **Push-to-talk dictation for macOS that runs entirely on your Mac.**

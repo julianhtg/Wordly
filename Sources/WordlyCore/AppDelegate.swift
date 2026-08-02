@@ -115,9 +115,23 @@ public final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate 
     }
 
     private func setIcon(_ symbol: String, tint: NSColor?) {
-        guard let button = statusItem.button else { return }
-        button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Wordly")
-        button.contentTintColor = tint
+        guard let button = statusItem.button,
+              let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Wordly")
+        else { return }
+        // An SF Symbol arrives as a template image, and the menu bar renders
+        // those in its own monochrome style — `contentTintColor` was simply
+        // ignored, so "recording" stayed black. Baking the colour in with a
+        // palette configuration is what actually shows red; without a tint the
+        // image stays a template so it follows light/dark menu bars.
+        if let tint, let coloured = image.withSymbolConfiguration(
+            NSImage.SymbolConfiguration(paletteColors: [tint])) {
+            coloured.isTemplate = false
+            button.image = coloured
+        } else {
+            image.isTemplate = true
+            button.image = image
+        }
+        button.contentTintColor = nil
     }
 
     private func setInfo(_ text: String) { infoItem.title = text }

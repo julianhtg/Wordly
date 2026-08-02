@@ -50,17 +50,42 @@ public final class FloatingIndicator {
         title: "✕", target: self, action: #selector(hide))
     private var rescueText = ""
     private var dismissTimer: Timer?
+    /// True between a show…() and hide(), i.e. the panel is meant to be on
+    /// screen right now. Drives the post-show health check.
+    private var wantsVisible = false
+    /// One window rebuild per show, so recovery can never loop.
+    private var hasRebuilt = false
 
-    private let pillSize = NSSize(width: 92, height: 15)
+    private let pillSize = NSSize(width: 92, height: 32)
     private let rescueSize = NSSize(width: 340, height: 132)
+    private static let panelBehavior: NSWindow.CollectionBehavior =
+        [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
 
-    public init() {}
+    public init() {
+        // A panel kept across a sleep or a display reconfigure can come back
+        // wedged — AppKit reports it on screen, the WindowServer disagrees and
+        // the pill never appears again. Cheaper to throw the window away than to
+        // diagnose the WindowServer.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(environmentChanged),
+            name: NSWorkspace.didWakeNotification, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(environmentChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    }
+
+    deinit {
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        NotificationCenter.default.removeObserver(self)
+    }
 
     // MARK: Public API (main thread)
 
     public func showListening() {
         guard enabled else { return }
         dismissTimer?.invalidate()
+        wantsVisible = true
+        hasRebuilt = false
         isShowingRescue = false
         spinner.stopAnimation(nil)
         spinner.isHidden = true
@@ -80,6 +105,8 @@ public final class FloatingIndicator {
         guard enabled else { return }
         dismissTimer?.invalidate()
         stopWaveAnimation()
+        wantsVisible = true
+        hasRebuilt = false
         isShowingRescue = false
         bars.isHidden = true
         rescueContainer.isHidden = true
@@ -111,6 +138,8 @@ public final class FloatingIndicator {
         rescueText = text
         rescueTextView.string = text
         rescueTextView.scroll(NSPoint(x: 0, y: 0))
+        wantsVisible = true
+        hasRebuilt = false
         isShowingRescue = true
         bars.isHidden = true
         spinner.stopAnimation(nil)
@@ -128,6 +157,7 @@ public final class FloatingIndicator {
     @objc public func hide() {
         dismissTimer?.invalidate()
         stopWaveAnimation()
+        wantsVisible = false
         isShowingRescue = false
         spinner.stopAnimation(nil)
         panel?.orderOut(nil)
@@ -161,6 +191,39 @@ public final class FloatingIndicator {
         return container
     }()
 
+    /// Every mode's views, in one reusable container. Built once and re-parented
+    /// into whatever panel is current, so a panel can be thrown away and rebuilt
+    /// without orphaning the constraints between these views.
+    private lazy var content: NSView = {
+        let content = NSView()
+        for view in [bars, spinner] {  // pill modes: centered
+            view.translatesAutoresizingMaskIntoConstraints = false
+            content.addSubview(view)
+            NSLayoutConstraint.activate([
+                view.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+                view.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            ])
+        }
+        bars.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        bars.heightAnchor.constraint(equalToConstant: 22).isActive = true
+
+        rescueContainer.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(rescueContainer)
+        // Top/bottom are .defaultLow so the rescue button-stack's ~55pt minimum
+        // height does NOT clamp the panel: in pill mode the panel stays at
+        // pillSize.height; in rescue mode setFrame(rescueSize) lets them fill.
+        let rcTop = rescueContainer.topAnchor.constraint(equalTo: content.topAnchor)
+        let rcBottom = rescueContainer.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        rcTop.priority = .defaultLow
+        rcBottom.priority = .defaultLow
+        NSLayoutConstraint.activate([  // rescue mode: fills the panel
+            rescueContainer.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            rescueContainer.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            rcTop, rcBottom,
+        ])
+        return content
+    }()
+
     private func makePanel() -> NSPanel {
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: pillSize),
@@ -172,7 +235,7 @@ public final class FloatingIndicator {
         panel.isOpaque = false
         panel.hasShadow = true
         panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.collectionBehavior = Self.panelBehavior
 
         // Solid dark capsule drawn directly (a layer backgroundColor wasn't
         // fully opaque and its corner radius didn't read as a true pill).
@@ -181,24 +244,15 @@ public final class FloatingIndicator {
         container.appearance = NSAppearance(named: .darkAqua)
         panel.contentView = container
 
-        for view in [bars, spinner] {  // pill modes: centered
-            view.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(view)
-            NSLayoutConstraint.activate([
-                view.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-                view.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            ])
-        }
-        bars.widthAnchor.constraint(equalToConstant: 60).isActive = true
-        bars.heightAnchor.constraint(equalToConstant: 8).isActive = true
-
-        rescueContainer.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(rescueContainer)
-        NSLayoutConstraint.activate([  // rescue mode: fills the panel
-            rescueContainer.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            rescueContainer.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            rescueContainer.topAnchor.constraint(equalTo: container.topAnchor),
-            rescueContainer.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        // Only these four constraints are per-panel; addSubview moves `content`
+        // out of any previous container and takes its own constraints with it.
+        content.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.topAnchor.constraint(equalTo: container.topAnchor),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         return panel
     }
@@ -213,8 +267,67 @@ public final class FloatingIndicator {
             panel.alphaValue = 0
             NSAnimationContext.runAnimationGroup { ctx in
                 ctx.duration = 0.16
+                // Never strand a half-faded (invisible) pill if the implicit
+                // animation gets dropped.
+                ctx.completionHandler = { panel.alphaValue = 1 }
                 panel.animator().alphaValue = 1
             }
+        }
+        wordlyLog("Wordly: pill shown frame=\(NSStringFromRect(panel.frame)) "
+              + "screens=\(NSScreen.screens.count)")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.verifyVisible()
+        }
+    }
+
+    /// A pill that AppKit ordered front but that isn't actually on screen is the
+    /// "pill vanished after wake" bug. Log the full state either way — comparing
+    /// a working dictation against a broken one is what will name the cause —
+    /// then rebuild the window once if it looks wrong.
+    ///
+    /// ponytail: occlusionState is logged but NOT judged. A visible, on-active-
+    /// space pill reports an undocumented 8192 rather than `.visible`, so gating
+    /// on it would rebuild (and blink) the pill on every single dictation.
+    private func verifyVisible() {
+        guard wantsVisible, let panel else { return }
+        let screens = NSScreen.screens.map(\.frame)
+        let healthy = PillHealth.isHealthy(isVisible: panel.isVisible,
+                                           alpha: panel.alphaValue,
+                                           isOnActiveSpace: panel.isOnActiveSpace,
+                                           hasScreen: panel.screen != nil,
+                                           frame: panel.frame, screenFrames: screens)
+        wordlyLog("""
+              Wordly: pill \(healthy ? "ok" : "NOT ON SCREEN") — \
+              visible=\(panel.isVisible) \
+              alpha=\(panel.alphaValue) activeSpace=\(panel.isOnActiveSpace) \
+              occlusion=\(panel.occlusionState.rawValue) screen=\(panel.screen != nil) \
+              frame=\(NSStringFromRect(panel.frame)) level=\(panel.level.rawValue) \
+              behavior=\(panel.collectionBehavior.rawValue) screens=\(screens)
+              """)
+        guard !healthy, !hasRebuilt else { return }
+        hasRebuilt = true
+        let size = panel.frame.size
+        let clickable = !panel.ignoresMouseEvents
+        panel.orderOut(nil)
+        self.panel = nil        // `content` re-parents into the fresh panel
+        resize(to: size, clickable: clickable)
+        show()
+        wordlyLog("Wordly: pill window rebuilt")
+    }
+
+    /// Wake from sleep or a display change. An idle panel is discarded (the next
+    /// dictation builds a fresh window); a visible one gets its level, Spaces
+    /// behaviour and position re-asserted.
+    @objc private func environmentChanged() {
+        guard let panel else { return }
+        if wantsVisible {
+            panel.level = .statusBar
+            panel.collectionBehavior = Self.panelBehavior
+            reposition(panel)
+            panel.orderFrontRegardless()
+        } else {
+            panel.orderOut(nil)
+            self.panel = nil
         }
     }
 
@@ -228,19 +341,44 @@ public final class FloatingIndicator {
     }
 
     private func reposition(_ panel: NSPanel) {
-        guard let screen = NSScreen.main else { return }
-        let vf = screen.visibleFrame            // excludes Dock + menu bar
-        let size = panel.frame.size
-        let origin = NSPoint(
-            x: vf.midX - size.width / 2,
-            y: vf.minY + 24)
-        panel.setFrameOrigin(origin)
+        // NSScreen.main can be nil right after a wake; falling back to any screen
+        // beats returning early and leaving the pill at a stale, possibly
+        // off-screen, origin.
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        panel.setFrameOrigin(pillOrigin(in: screen.visibleFrame,  // excl. Dock + menu bar
+                                        size: panel.frame.size))
     }
 
     @objc private func copyRescue() {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(rescueText, forType: .string)
         copyButton.title = "Copied ✓"
+    }
+}
+
+/// Centered horizontally, just above the Dock, and always fully inside the
+/// visible area — a frame left over from a bigger or now-detached display must
+/// never survive a reposition.
+func pillOrigin(in visibleFrame: NSRect, size: NSSize) -> NSPoint {
+    func clamp(_ value: CGFloat, _ low: CGFloat, _ high: CGFloat) -> CGFloat {
+        min(max(value, low), max(low, high))
+    }
+    return NSPoint(
+        x: clamp(visibleFrame.midX - size.width / 2,
+                 visibleFrame.minX, visibleFrame.maxX - size.width),
+        y: clamp(visibleFrame.minY + 24,
+                 visibleFrame.minY, visibleFrame.maxY - size.height))
+}
+
+/// Whether a pill that was ordered front is genuinely on screen. Split out as
+/// plain values so the "why did it vanish" logic is testable without a
+/// WindowServer.
+enum PillHealth {
+    static func isHealthy(isVisible: Bool, alpha: CGFloat, isOnActiveSpace: Bool,
+                          hasScreen: Bool, frame: NSRect,
+                          screenFrames: [NSRect]) -> Bool {
+        isVisible && alpha > 0.99 && isOnActiveSpace && hasScreen
+            && screenFrames.contains { $0.intersects(frame) }
     }
 }
 

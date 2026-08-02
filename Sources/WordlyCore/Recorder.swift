@@ -58,7 +58,7 @@ public final class Recorder {
                                                sampleRate: 16000, channels: 1,
                                                interleaved: false),
               let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            NSLog("Recorder: no usable input device")
+            wordlyLog("Recorder: no usable input device")
             return
         }
 
@@ -90,12 +90,15 @@ public final class Recorder {
                 var sumSquares: Float = 0
                 for i in 0..<frames { sumSquares += channel[0][i] * channel[0][i] }
                 let rms = (sumSquares / Float(frames)).squareRoot()
-                // Auto-gain: rise instantly to new peaks, decay slowly, and
-                // normalize against that peak (floored so background noise reads
-                // as silence). A soft gate below 20% keeps the resting line flat.
-                self.levelPeak = max(rms, self.levelPeak * 0.992)
+                // Auto-gain: rise instantly to new peaks, decay so a loud burst
+                // doesn't desensitize the meter for long, and normalize against
+                // that peak (floored so background noise reads as silence). A low
+                // gate keeps the resting line flat; a sqrt curve makes moderate
+                // speech fill the bars instead of needing a shout.
+                self.levelPeak = max(rms, self.levelPeak * 0.97)
                 let norm = rms / max(self.levelPeak, 0.01)
-                let level = norm <= 0.2 ? 0 : min(1, (norm - 0.2) / 0.8)
+                let gate: Float = 0.06
+                let level = norm <= gate ? 0 : min(1, ((norm - gate) / (1 - gate)).squareRoot())
                 DispatchQueue.main.async { onLevel(level) }
             }
         }
@@ -105,7 +108,7 @@ public final class Recorder {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            NSLog("Recorder: engine start failed: \(error)")
+            wordlyLog("Recorder: engine start failed: \(error)")
             return
         }
         isRecording = true

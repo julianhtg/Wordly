@@ -9,3 +9,6 @@ Resources/AppIcon.iconset/
 
 # Claude Code local settings
 .claude/
+
+# demo source; docs/demo.gif is the published artefact
+docs/*.mov

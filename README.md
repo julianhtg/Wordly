@@ -23,6 +23,12 @@ attempt at both: for the languages most people dictate in, the transcript is
 ready **before you let go of the key** — 196 ms end-to-end for a 7-second
 sentence on an M4 MacBook Air.
 
+<div align="center">
+
+<img src="docs/demo.gif" alt="Holding the hotkey in TextEdit: the pill shows the input level, and on release the sentence appears at the cursor" width="760">
+
+</div>
+
 ---
 
 ### Contents

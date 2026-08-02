@@ -14,11 +14,14 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>3</string>
+    <!-- Must track Package.swift's platform: the Parakeet engine needs 14.0,
+         and a lower floor here only means macOS launches the app on a system
+         where it cannot work. -->
     <key>LSMinimumSystemVersion</key>
-    <string>13.3</string>
+    <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
